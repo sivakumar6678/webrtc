@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple QR Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .result { margin: 10px 0; padding: 10px; border: 1px solid #ccc; }
+    </style>
+</head>
+<body>
+    <h1>QR Code Generation Test</h1>
+    <div id="status">Loading...</div>
+    <div id="qr-display"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.4/qrcode.min.js"></script>
+    <script>
+        const status = document.getElementById('status');
+        const qrDisplay = document.getElementById('qr-display');
+
+        function updateStatus(msg) {
+            status.textContent = msg;
+            console.log(msg);
+        }
+
+        // Test QR generation with multiple methods
+        async function testQRGeneration() {
+            const testUrl = 'https://example.com/join/test-123';
+            
+            updateStatus('Testing QR generation...');
+
+            // Method 1: Try QRCode library
+            if (typeof QRCode !== 'undefined') {
+                try {
+                    updateStatus('Method 1: Using QRCode library...');
+                    const qrData = await QRCode.toDataURL(testUrl, { width: 256 });
+                    
+                    const img1 = document.createElement('img');
+                    img1.src = qrData;
+                    img1.style.border = '2px solid green';
+                    
+                    const div1 = document.createElement('div');
+                    div1.className = 'result';
+                    div1.appendChild(document.createTextNode('✅ QRCode Library: '));
+                    div1.appendChild(img1);
+                    qrDisplay.appendChild(div1);
+                    
+                    updateStatus('✅ QRCode library works!');
+                    return;
+                } catch (e) {
+                    updateStatus('❌ QRCode library failed: ' + e.message);
+                }
+            } else {
+                updateStatus('❌ QRCode library not loaded');
+            }
+
+            // Method 2: Try QR API
+            try {
+                updateStatus('Method 2: Using QR API...');
+                const apiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=${encodeURIComponent(testUrl)}`;
+                
+                const img2 = document.createElement('img');
+                img2.src = apiUrl;
+                img2.style.border = '2px solid blue';
+                img2.onload = () => updateStatus('✅ QR API works!');
+                img2.onerror = () => updateStatus('❌ QR API failed');
+                
+                const div2 = document.createElement('div');
+                div2.className = 'result';
+                div2.appendChild(document.createTextNode('🌐 QR API: '));
+                div2.appendChild(img2);
+                qrDisplay.appendChild(div2);
+                
+            } catch (e) {
+                updateStatus('❌ QR API failed: ' + e.message);
+            }
+
+            // Method 3: Canvas fallback
+            try {
+                updateStatus('Method 3: Creating canvas fallback...');
+                
+                const canvas = document.createElement('canvas');
+                canvas.width = 256;
+                canvas.height = 256;
+                const ctx = canvas.getContext('2d');
+                
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, 256, 256);
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(1, 1, 254, 254);
+                
+                ctx.fillStyle = '#000000';
+                ctx.font = 'bold 16px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('QR CODE', 128, 30);
+                ctx.font = '12px Arial';
+                ctx.fillText('Visit URL:', 128, 60);
+                ctx.font = '10px Arial';
+                ctx.fillText(testUrl, 128, 90);
+                
+                const img3 = document.createElement('img');
+                img3.src = canvas.toDataURL();
+                img3.style.border = '2px solid orange';
+                
+                const div3 = document.createElement('div');
+                div3.className = 'result';
+                div3.appendChild(document.createTextNode('🎨 Canvas Fallback: '));
+                div3.appendChild(img3);
+                qrDisplay.appendChild(div3);
+                
+                updateStatus('✅ Canvas fallback created!');
+                
+            } catch (e) {
+                updateStatus('❌ Canvas fallback failed: ' + e.message);
+            }
+        }
+
+        // Wait for library to load, then test
+        setTimeout(testQRGeneration, 1000);
+    </script>
+</body>
+</html>

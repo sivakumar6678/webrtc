@@ -1,0 +1,50 @@
+.App {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.App h1 {
+  margin: 0;
+  padding: 20px 0;
+  background: rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(10px);
+}
+
+.App h2 {
+  color: #f0f0f0;
+  margin-bottom: 20px;
+}
+
+.App h3 {
+  color: #e0e0e0;
+  margin: 20px 0 10px 0;
+}
+
+.App p {
+  margin: 10px 0;
+}
+
+.App button {
+  background: #4CAF50;
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.App button:hover {
+  background: #45a049;
+}
+
+.App video {
+  border-radius: 10px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+.App img {
+  border-radius: 10px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
