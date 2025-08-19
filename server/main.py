@@ -1,132 +1,215 @@
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any, Dict, Optional
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-import json
-import uuid
-from typing import Dict, Set
-import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Store active connections by room_id
-rooms: Dict[str, Dict[str, WebSocket]] = {}
+# In-memory signaling store
+# rooms: {
+#   "<roomId>": {
+#       "offer": Optional[str],                 # SDP string from phone (offerer)
+#       "offerCandidates": list[dict],          # ICE candidates from phone
+#       "answer": Optional[str],                # SDP string from desktop (answerer)
+#       "answerCandidates": list[dict],         # ICE candidates from desktop
+#       "desktopConnected": bool,
+#       "phoneConnected": bool
+#   }
+# }
+rooms: Dict[str, Dict[str, Any]] = {}
 
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
+# Store live websocket connections per room/role (not persisted)
+# connections: { roomId: { "phone": WebSocket | None, "desktop": WebSocket | None } }
+connections: Dict[str, Dict[str, Optional[WebSocket]]] = {}
 
-    async def connect(self, websocket: WebSocket, client_id: str):
-        await websocket.accept()
-        self.active_connections[client_id] = websocket
-        logger.info(f"Client {client_id} connected")
 
-    def disconnect(self, client_id: str):
-        if client_id in self.active_connections:
-            del self.active_connections[client_id]
-            logger.info(f"Client {client_id} disconnected")
+def get_room(room_id: str) -> Dict[str, Any]:
+    if room_id not in rooms:
+        rooms[room_id] = {
+            "offer": None,
+            "offerCandidates": [],
+            "answer": None,
+            "answerCandidates": [],
+            "desktopConnected": False,
+            "phoneConnected": False,
+        }
+    if room_id not in connections:
+        connections[room_id] = {"phone": None, "desktop": None}
+    return rooms[room_id]
 
-    async def send_personal_message(self, message: dict, client_id: str):
-        if client_id in self.active_connections:
-            await self.active_connections[client_id].send_text(json.dumps(message))
 
-    async def broadcast_to_room(self, message: dict, room_id: str, exclude_client: str = None):
-        if room_id in rooms:
-            for client_id, websocket in rooms[room_id].items():
-                if client_id != exclude_client:
-                    try:
-                        await websocket.send_text(json.dumps(message))
-                    except:
-                        # Remove disconnected client
-                        del rooms[room_id][client_id]
+async def relay_or_queue(room_id: str, from_role: str, payload: dict) -> None:
+    """Relay payload to the opposite role if connected; else queue if candidate.
+    For offer/answer we store the SDP on the room; for candidates we append to the respective list.
+    """
+    opp_role = "desktop" if from_role == "phone" else "phone"
+    opp_ws = connections.get(room_id, {}).get(opp_role)
 
-manager = ConnectionManager()
+    msg_type = payload.get("type")
+
+    # Persist state
+    room = get_room(room_id)
+    if msg_type == "offer":
+        room["offer"] = payload.get("sdp")
+    elif msg_type == "answer":
+        room["answer"] = payload.get("sdp")
+    elif msg_type == "ice-candidate":
+        candidate = payload.get("candidate")
+        if from_role == "phone":
+            room["offerCandidates"].append(candidate)
+        else:
+            room["answerCandidates"].append(candidate)
+
+    # Relay if possible
+    if opp_ws is not None:
+        try:
+            await opp_ws.send_text(json.dumps(payload))
+        except Exception as e:
+            logger.warning(f"Failed to relay to {opp_role} in room {room_id}: {e}")
+
+
+async def send_backlog(room_id: str, role: str) -> None:
+    """Upon join, deliver any backlog to the joining role."""
+    room = get_room(room_id)
+    ws = connections[room_id][role]
+    if ws is None:
+        return
+
+    try:
+        if role == "desktop":
+            # Send offer from phone if available
+            if room["offer"]:
+                await ws.send_text(json.dumps({
+                    "type": "offer",
+                    "roomId": room_id,
+                    "sdp": room["offer"],
+                }))
+            # Send any offer-side ICE candidates
+            for cand in room["offerCandidates"]:
+                await ws.send_text(json.dumps({
+                    "type": "ice-candidate",
+                    "roomId": room_id,
+                    "candidate": cand,
+                }))
+        elif role == "phone":
+            # Send answer from desktop if available
+            if room["answer"]:
+                await ws.send_text(json.dumps({
+                    "type": "answer",
+                    "roomId": room_id,
+                    "sdp": room["answer"],
+                }))
+            # Send any answer-side ICE candidates
+            for cand in room["answerCandidates"]:
+                await ws.send_text(json.dumps({
+                    "type": "ice-candidate",
+                    "roomId": room_id,
+                    "candidate": cand,
+                }))
+    except Exception as e:
+        logger.warning(f"Failed sending backlog to {role} in room {room_id}: {e}")
+
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    client_id = None
-    room_id = None
-    
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
+
+    room_id: Optional[str] = None
+    role: Optional[str] = None  # "phone" or "desktop"
+
     try:
         while True:
-            data = await websocket.receive_text()
-            message = json.loads(data)
-            
-            if message["type"] == "join":
-                client_id = message["clientId"]
-                room_id = message["roomId"]
-                client_type = message["clientType"]  # "desktop" or "phone"
-                
-                # Initialize room if it doesn't exist
-                if room_id not in rooms:
-                    rooms[room_id] = {}
-                
-                # Add client to room
-                rooms[room_id][client_id] = websocket
-                
-                logger.info(f"Client {client_id} ({client_type}) joined room {room_id}")
-                
-                # Notify other clients in the room
-                await manager.broadcast_to_room({
-                    "type": "user-joined",
-                    "clientId": client_id,
-                    "clientType": client_type
-                }, room_id, exclude_client=client_id)
-                
-            elif message["type"] == "offer":
-                # Forward offer to other clients in the room
-                await manager.broadcast_to_room({
-                    "type": "offer",
-                    "offer": message["offer"],
-                    "from": client_id
-                }, room_id, exclude_client=client_id)
-                
-            elif message["type"] == "answer":
-                # Forward answer to other clients in the room
-                await manager.broadcast_to_room({
-                    "type": "answer",
-                    "answer": message["answer"],
-                    "from": client_id
-                }, room_id, exclude_client=client_id)
-                
-            elif message["type"] == "ice-candidate":
-                # Forward ICE candidate to other clients in the room
-                await manager.broadcast_to_room({
-                    "type": "ice-candidate",
-                    "candidate": message["candidate"],
-                    "from": client_id
-                }, room_id, exclude_client=client_id)
-                
-    except WebSocketDisconnect:
-        logger.info(f"Client {client_id} disconnected from room {room_id}")
-        if room_id and client_id and room_id in rooms:
-            if client_id in rooms[room_id]:
-                del rooms[room_id][client_id]
-            
-            # Notify other clients in the room
-            await manager.broadcast_to_room({
-                "type": "user-left",
-                "clientId": client_id
-            }, room_id)
-            
-            # Clean up empty rooms
-            if not rooms[room_id]:
-                del rooms[room_id]
+            message_raw = await ws.receive_text()
+            msg = json.loads(message_raw)
+            msg_type = msg.get("type")
+            room_id = msg.get("roomId")
 
-# Serve static files from frontend/dist
-app.mount("/static", StaticFiles(directory="../frontend/dist/assets"), name="static")
+            if msg_type == "join":
+                role = msg.get("role")  # expected: "phone" or "desktop"
+                if role not in ("phone", "desktop") or not room_id:
+                    await ws.close()
+                    return
+
+                room = get_room(room_id)
+                connections[room_id][role] = ws
+                if role == "phone":
+                    room["phoneConnected"] = True
+                else:
+                    room["desktopConnected"] = True
+
+                logger.info(f"{role} joined room {room_id}")
+
+                # On join, push any backlog relevant to this role
+                await send_backlog(room_id, role)
+
+            elif msg_type in ("offer", "answer", "ice-candidate"):
+                if not room_id or not role:
+                    continue
+                # Normalize payload to minimal schema
+                payload: Dict[str, Any] = {
+                    "type": msg_type,
+                    "roomId": room_id,
+                }
+                if msg_type in ("offer", "answer"):
+                    payload["sdp"] = msg.get("sdp")
+                elif msg_type == "ice-candidate":
+                    payload["candidate"] = msg.get("candidate")
+
+                await relay_or_queue(room_id, role, payload)
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.warning(f"WebSocket error: {e}")
+    finally:
+        # Cleanup on disconnect
+        if room_id and role:
+            if room_id in connections and connections[room_id].get(role) is ws:
+                connections[room_id][role] = None
+            room = rooms.get(room_id)
+            if room:
+                if role == "phone":
+                    room["phoneConnected"] = False
+                else:
+                    room["desktopConnected"] = False
+                # Optionally cleanup room if both disconnected
+                if not room["phoneConnected"] and not room["desktopConnected"]:
+                    # Keep SDP/candidates around briefly could be considered; for now purge
+                    rooms.pop(room_id, None)
+                    connections.pop(room_id, None)
+
+
+# Serve static frontend (Vite build) with SPA fallbacks (avoid mounting at "/" to prevent 404 on deep links)
+from pathlib import Path
+DIST_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+ASSETS_DIR = DIST_DIR / "assets"
+
+# Serve built assets
+app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
+
+# Root and SPA routes serve index.html
+@app.get("/")
+async def index():
+    return FileResponse(DIST_DIR / "index.html")
 
 @app.get("/join/{room_id}")
-async def join_page(room_id: str):
-    return FileResponse("../frontend/dist/index.html")
+async def spa_join(room_id: str):
+    return FileResponse(DIST_DIR / "index.html")
 
-@app.get("/")
-async def read_root():
-    return FileResponse("../frontend/dist/index.html")
+@app.get("/{full_path:path}")
+async def spa_fallback(full_path: str):
+    return FileResponse(DIST_DIR / "index.html")
 
-@app.get("/{path:path}")
-async def catch_all(path: str):
-    return FileResponse("../frontend/dist/index.html")
+# Serve Vite icon (avoids 404 in console)
+@app.get("/vite.svg")
+async def vite_icon():
+    file_path = DIST_DIR / "vite.svg"
+    return FileResponse(file_path) if file_path.exists() else FileResponse(DIST_DIR / "index.html")

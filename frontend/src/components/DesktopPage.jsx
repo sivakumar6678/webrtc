@@ -8,190 +8,151 @@ function DesktopPage() {
   const videoRef = useRef(null)
   const peerConnectionRef = useRef(null)
   const websocketRef = useRef(null)
-  const clientId = useRef(`desktop-${Date.now()}`)
 
   useEffect(() => {
-    // Generate unique room ID
-    const newRoomId = `room-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    // Generate UUID-ish roomId
+    const newRoomId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
     setRoomId(newRoomId)
 
-    // Generate QR code
+    // Generate QR code for phone join URL
     const joinUrl = `${window.location.origin}/join/${newRoomId}`
     QRCode.toDataURL(joinUrl)
       .then(url => setQrCodeUrl(url))
-      .catch(err => console.error('Error generating QR code:', err))
+      .catch(err => console.error('QR error:', err))
 
-    // Initialize WebSocket connection
+    // Initialize WebSocket
     initializeWebSocket(newRoomId)
 
     return () => {
-      if (websocketRef.current) {
-        websocketRef.current.close()
-      }
-      if (peerConnectionRef.current) {
-        peerConnectionRef.current.close()
-      }
+      websocketRef.current?.close()
+      peerConnectionRef.current?.close()
     }
   }, [])
 
-  const initializeWebSocket = (roomId) => {
+  const initializeWebSocket = (rid) => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const wsUrl = `${protocol}//${window.location.host}/ws`
-    
+
     websocketRef.current = new WebSocket(wsUrl)
 
     websocketRef.current.onopen = () => {
-      console.log('WebSocket connected')
-      // Join room as desktop
+      console.log('WS connected')
       websocketRef.current.send(JSON.stringify({
         type: 'join',
-        roomId: roomId,
-        clientId: clientId.current,
-        clientType: 'desktop'
+        role: 'desktop',
+        roomId: rid,
       }))
     }
 
     websocketRef.current.onmessage = async (event) => {
-      const message = JSON.parse(event.data)
-      console.log('Received message:', message)
+      const msg = JSON.parse(event.data)
+      console.log('WS message:', msg)
 
-      switch (message.type) {
-        case 'user-joined':
-          if (message.clientType === 'phone') {
-            setConnectionStatus('Phone connected! Setting up video...')
-            await initializePeerConnection()
-          }
-          break
-        case 'offer':
-          await handleOffer(message.offer)
-          break
-        case 'answer':
-          await handleAnswer(message.answer)
-          break
-        case 'ice-candidate':
-          await handleIceCandidate(message.candidate)
-          break
-        case 'user-left':
-          setConnectionStatus('Phone disconnected. Waiting for connection...')
-          if (videoRef.current) {
-            videoRef.current.srcObject = null
-          }
-          break
+      if (msg.type === 'offer') {
+        await handleOffer(msg)
+      } else if (msg.type === 'ice-candidate') {
+        await handleIceCandidate(msg.candidate)
       }
     }
 
-    websocketRef.current.onerror = (error) => {
-      console.error('WebSocket error:', error)
+    websocketRef.current.onerror = (e) => {
+      console.error('WS error', e)
       setConnectionStatus('Connection error')
     }
   }
 
-  const initializePeerConnection = async () => {
-    const configuration = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
-      ]
-    }
+  const ensurePeer = async () => {
+    if (peerConnectionRef.current) return
+    const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+    const pc = new RTCPeerConnection(configuration)
+    peerConnectionRef.current = pc
 
-    peerConnectionRef.current = new RTCPeerConnection(configuration)
+    // Explicitly receive only (no local tracks on desktop)
+    pc.addTransceiver('video', { direction: 'recvonly' })
 
-    // Handle incoming stream
-    peerConnectionRef.current.ontrack = (event) => {
-      console.log('Received remote stream')
+    pc.ontrack = (event) => {
+      console.log('Remote track received', event.streams)
       if (videoRef.current) {
         videoRef.current.srcObject = event.streams[0]
-        setConnectionStatus('Video stream active!')
+        console.log('[Desktop] videoRef.srcObject assigned')
+        // Ensure playback on some browsers
+        const v = videoRef.current
+        const tryPlay = () => v.play().catch(() => setTimeout(tryPlay, 300))
+        v.onloadedmetadata = () => tryPlay()
+        setConnectionStatus('Streaming')
       }
     }
 
-    // Handle ICE candidates
-    peerConnectionRef.current.onicecandidate = (event) => {
+    pc.onicecandidate = (event) => {
       if (event.candidate) {
-        websocketRef.current.send(JSON.stringify({
+        websocketRef.current?.send(JSON.stringify({
           type: 'ice-candidate',
-          candidate: event.candidate
+          roomId,
+          candidate: event.candidate,
         }))
       }
     }
 
-    // Handle connection state changes
-    peerConnectionRef.current.onconnectionstatechange = () => {
-      console.log('Connection state:', peerConnectionRef.current.connectionState)
-      if (peerConnectionRef.current.connectionState === 'connected') {
-        setConnectionStatus('Connected!')
-      } else if (peerConnectionRef.current.connectionState === 'disconnected') {
-        setConnectionStatus('Disconnected')
-      }
+    pc.onconnectionstatechange = () => {
+      console.log('PC state:', pc.connectionState)
     }
   }
 
-  const handleOffer = async (offer) => {
-    if (!peerConnectionRef.current) {
-      await initializePeerConnection()
-    }
-
-    await peerConnectionRef.current.setRemoteDescription(offer)
-    const answer = await peerConnectionRef.current.createAnswer()
-    await peerConnectionRef.current.setLocalDescription(answer)
-
-    websocketRef.current.send(JSON.stringify({
+  const handleOffer = async ({ sdp }) => {
+    await ensurePeer()
+    const pc = peerConnectionRef.current
+    await pc.setRemoteDescription({ type: 'offer', sdp })
+    const answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+    websocketRef.current?.send(JSON.stringify({
       type: 'answer',
-      answer: answer
+      roomId,
+      sdp: answer.sdp,
     }))
   }
 
-  const handleAnswer = async (answer) => {
-    if (peerConnectionRef.current) {
-      await peerConnectionRef.current.setRemoteDescription(answer)
-    }
-  }
-
   const handleIceCandidate = async (candidate) => {
-    if (peerConnectionRef.current) {
-      await peerConnectionRef.current.addIceCandidate(candidate)
+    if (!candidate) return
+    await ensurePeer()
+    const pc = peerConnectionRef.current
+    try {
+      await pc.addIceCandidate(candidate)
+    } catch (e) {
+      console.warn('addIceCandidate failed', e)
     }
   }
 
   return (
-    <div style={{ padding: '20px', textAlign: 'center' }}>
-      <h1>WebRTC Multi-Object Detection</h1>
-      <h2>Desktop Viewer</h2>
-      
-      <div style={{ marginBottom: '20px' }}>
-        <p><strong>Room ID:</strong> {roomId}</p>
-        <p><strong>Status:</strong> {connectionStatus}</p>
-      </div>
+    <div style={{ padding: 16 }}>
+      <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+        <h2 style={{ textAlign: 'center' }}>Desktop Viewer</h2>
 
-      <div style={{ marginBottom: '20px' }}>
-        <h3>Scan QR Code with Phone</h3>
-        {qrCodeUrl && (
-          <img 
-            src={qrCodeUrl} 
-            alt="QR Code" 
-            style={{ border: '1px solid #ccc', padding: '10px' }}
+        <div style={{ marginBottom: 12, textAlign: 'center' }}>
+          <p><strong>Room:</strong> {roomId}</p>
+          <p><strong>Status:</strong> {connectionStatus}</p>
+        </div>
+
+        {/* Video on top, responsive full width */}
+        <div style={{ width: '100%', marginBottom: 16 }}>
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            style={{ width: '100%', height: 'auto', maxHeight: '70vh', border: '2px solid #333', background: '#000' }}
           />
-        )}
-        <p style={{ fontSize: '12px', color: '#666', marginTop: '10px' }}>
-          Or visit: {window.location.origin}/join/{roomId}
-        </p>
-      </div>
+        </div>
 
-      <div style={{ marginTop: '20px' }}>
-        <h3>Video Stream</h3>
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          style={{
-            width: '100%',
-            maxWidth: '640px',
-            height: 'auto',
-            border: '2px solid #333',
-            backgroundColor: '#000'
-          }}
-        />
+        {/* QR below video */}
+        <div style={{ textAlign: 'center' }}>
+          <h3>Scan with phone</h3>
+          {qrCodeUrl && (
+            <img src={qrCodeUrl} alt="QR" style={{ border: '1px solid #ccc', padding: 10, maxWidth: 256, width: '100%', height: 'auto' }} />
+          )}
+          <p style={{ fontSize: 12, color: '#666', marginTop: 10 }}>
+            Or open: {window.location.origin}/join/{roomId}
+          </p>
+        </div>
       </div>
     </div>
   )

@@ -1,33 +1,41 @@
-# Logs
-logs
+# Node / Vite
+node_modules/
+dist/
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# Python (irrelevant here, but kept if monorepo tooling runs at root)
+server/venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.build/
+.pytest_cache/
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
+# Editors & OS
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+.idea/
+.vscode/
+*.swp
 
-./FIXES_SUMMARY.md
-./IMPLEMENTATION_SUMMARY.md
-./README.md
-./TODO.md
-./qr_test.html
-./test_qr_simple.html
-./test_qr.html
-./TASK_SPEC.md
+# Env & secrets
+.env
+.env.*
+
+# Coverage/Reports
+coverage/
+reports/
+
+# Build artifacts
+*.tgz
+*.zip
+
+# Local test/demo files (exclude from GitHub)
+FIXES_SUMMARY.md
+IMPLEMENTATION_SUMMARY.md
+README.md
+TODO.md
+qr_test.html
+test_qr_simple.html
+test_qr.html
+TASK_SPEC.md
