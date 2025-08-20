@@ -47,13 +47,20 @@ function DesktopPage() {
 
   // Phase 6: Metrics collection store (in-memory)
   const metricsStoreRef = useRef({
-    fps: [],
-    latencyMs: [],
+    fps: [], // per-second samples
+    latencyMs: [], // per-frame model latency fallback
+    e2eLatencyMs: [], // per-frame E2E latency: overlay_display_ts - capture_ts
     detectionCountPerFrame: [],
     detectionsByFrame: []
   })
   const frameIndexRef = useRef(0)
   const currentFpsRef = useRef(0)
+  const processedFramesRef = useRef(0)
+
+  // Bench mode timestamp sync
+  const lastCaptureTsRef = useRef(0)
+  const lastCaptureFrameRef = useRef(0)
+  const benchRunningRef = useRef(false)
 
   useEffect(() => {
     // Generate roomId
@@ -289,6 +296,12 @@ useEffect(() => {
         const key = d.className || 'unknown'
         objectsMap[key] = (objectsMap[key] || 0) + 1
       }
+      // E2E latency: overlay_display_ts - capture_ts
+      const displayTs = performance.now()
+      const captureTs = lastCaptureTsRef.current || displayTs
+      const e2e = Math.max(0, displayTs - captureTs)
+      metricsStoreRef.current.e2eLatencyMs.push(e2e)
+
       metricsStoreRef.current.latencyMs.push(Number(detectionLatency.current) || 0)
       metricsStoreRef.current.detectionCountPerFrame.push(lastDetections.current.length)
       metricsStoreRef.current.detectionsByFrame.push({
@@ -296,6 +309,8 @@ useEffect(() => {
         objects: objectsMap
       })
       frameIndexRef.current += 1
+      // Count processed frames (frames drawn with detections overlay)
+      processedFramesRef.current += 1
     }
 
     if (isDetectionRunning.current) {
@@ -344,6 +359,10 @@ useEffect(() => {
           setIsVideoMirrored(msg.cameraType === 'front')
           console.log('[Desktop] Phone joined with camera type:', msg.cameraType)
         }
+      } else if (msg.type === 'capture_ts') {
+        // Phone periodically sends capture timestamps via WS fallback
+        lastCaptureTsRef.current = msg.ts || performance.now()
+        lastCaptureFrameRef.current = (lastCaptureFrameRef.current || 0) + 1
       }
     }
 
@@ -467,21 +486,49 @@ useEffect(() => {
     }
   }
 
+  // Helper: compute percentile from array of numbers
+  const percentile = (values, p) => {
+    if (!values || values.length === 0) return 0
+    const sorted = [...values].sort((a,b)=>a-b)
+    const idx = (p/100) * (sorted.length - 1)
+    const lo = Math.floor(idx)
+    const hi = Math.ceil(idx)
+    if (lo === hi) return sorted[lo]
+    const w = idx - lo
+    return sorted[lo]*(1-w) + sorted[hi]*w
+  }
+
   // Phase 6: Export metrics to JSON and trigger download
-  const exportMetrics = () => {
+  const exportMetrics = (summaryOverride=null) => {
     const store = metricsStoreRef.current
+
+    // Summary (bench-aware): if provided, use override; else derive basic summary
+    const summary = summaryOverride || {
+      e2e_latency_ms: {
+        median: Number(percentile(store.e2eLatencyMs, 50).toFixed(1)),
+        p95: Number(percentile(store.e2eLatencyMs, 95).toFixed(1))
+      },
+      fps_processed: currentFpsRef.current,
+      uplink_kbps: hudMetrics.bandwidth.uplink,
+      downlink_kbps: hudMetrics.bandwidth.downlink
+    }
+
     const payload = {
-      frameCount: frameIndexRef.current,
-      fps: store.fps, // per-second samples
-      latencyMs: store.latencyMs, // per-frame
-      detections: store.detectionsByFrame // per-frame objects map
+      durationSec: benchRunningRef.current ? undefined : undefined,
+      summary,
+      samples: {
+        fps: store.fps,
+        latencyMs: store.latencyMs,
+        e2eLatencyMs: store.e2eLatencyMs,
+        detections: store.detectionsByFrame
+      }
     }
 
     // Log summary before export
     const totalDetections = store.detectionCountPerFrame.reduce((a, b) => a + b, 0)
-    console.log('[Export] Frames:', payload.frameCount)
-    console.log('[Export] FPS samples:', store.fps.length, store.fps)
-    console.log('[Export] Latency samples:', store.latencyMs.length)
+    console.log('[Export] Frames:', frameIndexRef.current)
+    console.log('[Export] FPS samples:', store.fps.length)
+    console.log('[Export] E2E Latency samples:', store.e2eLatencyMs.length)
     console.log('[Export] Total detections across frames:', totalDetections)
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
@@ -493,6 +540,77 @@ useEffect(() => {
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
+  }
+
+  // Phase 6B: 30s bench runner (collect summary and export)
+  const startBench = async (durationSec = 30) => {
+    if (benchRunningRef.current) return
+    benchRunningRef.current = true
+
+    // Reset stores for a clean window
+    metricsStoreRef.current.fps = []
+    metricsStoreRef.current.latencyMs = []
+    metricsStoreRef.current.e2eLatencyMs = []
+    metricsStoreRef.current.detectionCountPerFrame = []
+    metricsStoreRef.current.detectionsByFrame = []
+    frameIndexRef.current = 0
+    processedFramesRef.current = 0
+
+    const start = performance.now()
+    const endAt = start + durationSec * 1000
+
+    // Poll bandwidth while running
+    const bwTimer = setInterval(() => metricsTracker.updateBandwidth(), 1000)
+
+    const benchTick = () => {
+      if (!benchRunningRef.current) return
+      if (performance.now() >= endAt) {
+        clearInterval(bwTimer)
+        benchRunningRef.current = false
+
+        // Compute summary
+        const e2e = metricsStoreRef.current.e2eLatencyMs
+        const median = Number(percentile(e2e, 50).toFixed(1))
+        const p95 = Number(percentile(e2e, 95).toFixed(1))
+        const fpsProcessed = Math.round(processedFramesRef.current / durationSec)
+        const { uplink, downlink } = metricsTracker.currentBandwidth
+
+        const summary = {
+          e2e_latency_ms: { median, p95 },
+          fps_processed: fpsProcessed,
+          uplink_kbps: uplink,
+          downlink_kbps: downlink
+        }
+
+        const payload = {
+          durationSec,
+          summary,
+          samples: {
+            e2eLatencyMs: e2e,
+            // Optional arrays
+            fps: metricsStoreRef.current.fps,
+            latencyMs: metricsStoreRef.current.latencyMs,
+            detections: metricsStoreRef.current.detectionsByFrame
+          }
+        }
+
+        // Export bench metrics.json
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = 'metrics.json'
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+
+        console.log('[Bench] Done:', payload)
+        return
+      }
+      requestAnimationFrame(benchTick)
+    }
+    requestAnimationFrame(benchTick)
   }
 
   return (
@@ -555,17 +673,29 @@ useEffect(() => {
         <div style={{ color: '#00ffff' }}>Latency: {detectionLatency.current.toFixed(1)}ms</div>
         <div style={{ color: '#ff9900' }}>Tensors: {memoryInfo.numTensors}</div>
         <div style={{ color: '#ff6600' }}>Memory: {(memoryInfo.numBytes / 1024 / 1024).toFixed(1)}MB</div>
-        <button onClick={exportMetrics} style={{
-          marginTop: '6px',
-          background: '#1e90ff',
-          color: 'white',
-          border: 'none',
-          padding: '6px 8px',
-          borderRadius: '6px',
-          cursor: 'pointer'
-        }}>
-          Download Metrics
-        </button>
+        <div style={{ color: '#00cccc' }}>↓{hudMetrics.bandwidth.downlink}kbps ↑{hudMetrics.bandwidth.uplink}kbps</div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+          <button onClick={exportMetrics} style={{
+            background: '#1e90ff',
+            color: 'white',
+            border: 'none',
+            padding: '6px 8px',
+            borderRadius: '6px',
+            cursor: 'pointer'
+          }}>
+            Download Metrics
+          </button>
+          <button onClick={() => startBench(30)} style={{
+            background: '#00b894',
+            color: 'white',
+            border: 'none',
+            padding: '6px 8px',
+            borderRadius: '6px',
+            cursor: 'pointer'
+          }}>
+            Start 30s Bench
+          </button>
+        </div>
       </div>
 
       {/* QR Code Overlay - Bottom Right */}
@@ -635,8 +765,8 @@ useEffect(() => {
           muted
           controls={false}
           style={{
-            width: '640px',
-            height: '480px',
+            width: '720px',
+            height: '540px',
             borderRadius: 8,
             background: 'linear-gradient(45deg, #0d3ee0ff 25%, transparent 25%), linear-gradient(-45deg, #1a1a1aff 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #f10000ff 75%), linear-gradient(-45deg, transparent 75%, #1a1a1a 75%)',
             backgroundSize: '20px 20px',
@@ -658,8 +788,8 @@ useEffect(() => {
             position: 'absolute',
             top: 0,
             left: 0,
-            width: '640px',
-            height: '480px',
+            width: '720px',
+            height: '540px',
             pointerEvents: 'none',
             zIndex: 2
           }}

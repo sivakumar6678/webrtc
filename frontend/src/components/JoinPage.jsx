@@ -152,6 +152,15 @@ const startCamera = async () => {
           roomId,
           cameraType: cameraType // Send camera type to desktop
         }))
+        // Periodically send capture timestamp for E2E calculation (WS fallback)
+        const tsTimer = setInterval(() => {
+          if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'capture_ts', roomId, ts: performance.now() }))
+          } else {
+            clearInterval(tsTimer)
+          }
+        }, 200)
+
         await setupPeerConnection()
         await createAndSendOffer()
       } catch (error) {
