@@ -40,6 +40,7 @@ def get_room(room_id: str) -> Dict[str, Any]:
             "answerCandidates": [],
             "desktopConnected": False,
             "phoneConnected": False,
+            "cameraType": None,
         }
     if room_id not in connections:
         connections[room_id] = {"phone": None, "desktop": None}
@@ -142,8 +143,35 @@ async def websocket_endpoint(ws: WebSocket):
                 connections[room_id][role] = ws
                 if role == "phone":
                     room["phoneConnected"] = True
+                    # Store camera type if provided
+                    camera_type = msg.get("cameraType")
+                    if camera_type:
+                        room["cameraType"] = camera_type
+                        # Relay camera type to desktop if connected
+                        desktop_ws = connections[room_id].get("desktop")
+                        if desktop_ws:
+                            try:
+                                await desktop_ws.send_text(json.dumps({
+                                    "type": "join",
+                                    "role": "phone",
+                                    "roomId": room_id,
+                                    "cameraType": camera_type
+                                }))
+                            except Exception as e:
+                                logger.warning(f"Failed to relay camera type to desktop: {e}")
                 else:
                     room["desktopConnected"] = True
+                    # Send camera type to desktop if phone already connected
+                    if "cameraType" in room:
+                        try:
+                            await ws.send_text(json.dumps({
+                                "type": "join",
+                                "role": "phone",
+                                "roomId": room_id,
+                                "cameraType": room["cameraType"]
+                            }))
+                        except Exception as e:
+                            logger.warning(f"Failed to send camera type to desktop: {e}")
 
                 logger.info(f"{role} joined room {room_id}")
 

@@ -10,3 +10,26 @@ TASK_SPEC.md
 
 # Throwaway test files
 qr_test*.html
+DETECTION_FIXES_SUMMARY.md  
+FIXES_APPLIED.md            
+IMPLEMENTATION_STATUS.md          
+package-lock.json            
+PHASE4_SUMMARY.md  
+TESTING_GUIDE.md
+download_model.sh           
+FIXES_SUMMARY.md            
+IMPLEMENTATION_SUMMARY.md         
+PHASE4_INSTRUCTIONS.md       
+qr_test.html       
+TASK_SPEC.md         
+test_qr.html
+download_ssd_model.sh                           
+ORIENTATION_AND_MIRRORING_FIX.md  
+PHASE4_ORIENTATION_FIX.md    
+TENSOR_ERROR_FIX.md  
+test_qr_simple.html
+download_tfjs_model.sh
+IMPLEMENTATION_COMPLETE.md  
+package.json
+PHASE4_REAL_MODEL_README.md
+test_detection.html

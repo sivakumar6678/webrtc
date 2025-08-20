@@ -9,6 +9,7 @@ function JoinPage() {
   const [isConnected, setIsConnected] = useState(false)
   const [cameraReady, setCameraReady] = useState(false)
   const [cameraOpened, setCameraOpened] = useState(false)
+  const [cameraType, setCameraType] = useState('unknown') // 'front', 'back', or 'unknown'
 
   const localVideoRef = useRef(null)
   const pcRef = useRef(null)
@@ -38,11 +39,33 @@ function JoinPage() {
 const startCamera = async () => {
   try {
     setStatus('Requesting camera...')
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment' },
+    
+    // Try back camera first (environment), fallback to front if needed
+    let constraints = {
+      video: { 
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      },
       audio: false,
-    })
-    console.log('[Phone] Local stream captured', stream)
+    }
+    
+    let stream
+    let detectedCameraType = 'back'
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints)
+      console.log('[Phone] Back camera stream captured')
+      detectedCameraType = 'back'
+    } catch (backCameraError) {
+      console.warn('[Phone] Back camera failed, trying front camera:', backCameraError)
+      constraints.video.facingMode = { ideal: 'user' }
+      stream = await navigator.mediaDevices.getUserMedia(constraints)
+      console.log('[Phone] Front camera stream captured')
+      detectedCameraType = 'front'
+    }
+    
+    setCameraType(detectedCameraType)
+    
     streamRef.current = stream
     if (localVideoRef.current) {
       localVideoRef.current.srcObject = stream
@@ -61,15 +84,33 @@ const startCamera = async () => {
   const handleOpenCamera = async () => {
     try {
       setStatus('Requesting camera...')
-      const stream = await navigator.mediaDevices.getUserMedia({
+      
+      // Try back camera first (environment), fallback to front if needed
+      let constraints = {
         video: {
-          facingMode: 'environment',
+          facingMode: { ideal: 'environment' },
           width: { ideal: 1280 },
           height: { ideal: 720 }
         },
         audio: false,
-      })
-      console.log('[Phone] Local stream captured', stream)
+      }
+      
+      let stream
+      let detectedCameraType = 'back'
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints)
+        console.log('[Phone] Back camera stream captured')
+        detectedCameraType = 'back'
+      } catch (backCameraError) {
+        console.warn('[Phone] Back camera failed, trying front camera:', backCameraError)
+        constraints.video.facingMode = { ideal: 'user' }
+        stream = await navigator.mediaDevices.getUserMedia(constraints)
+        console.log('[Phone] Front camera stream captured')
+        detectedCameraType = 'front'
+      }
+      
+      setCameraType(detectedCameraType)
+      
       streamRef.current = stream
 
       if (localVideoRef.current) {
@@ -86,7 +127,7 @@ const startCamera = async () => {
 
       setCameraReady(true)
       setCameraOpened(true)
-      setStatus('Camera ready. Now click Connect to stream.')
+      setStatus(`${detectedCameraType === 'back' ? 'Back' : 'Front'} camera ready. Now click Connect to stream.`)
     } catch (error) {
       console.error('[Phone] getUserMedia error', error)
       setStatus('Camera permission denied or unavailable')
@@ -105,7 +146,12 @@ const startCamera = async () => {
     ws.onopen = async () => {
       console.log('[Phone] WebSocket connected')
       try {
-        ws.send(JSON.stringify({ type: 'join', role: 'phone', roomId }))
+        ws.send(JSON.stringify({ 
+          type: 'join', 
+          role: 'phone', 
+          roomId,
+          cameraType: cameraType // Send camera type to desktop
+        }))
         await setupPeerConnection()
         await createAndSendOffer()
       } catch (error) {
@@ -304,6 +350,9 @@ const handleConnect = async () => {
       <div style={{ marginBottom: 12 }}>
         <p><strong>Room:</strong> {roomId}</p>
         <p><strong>Status:</strong> {status}</p>
+        {cameraType !== 'unknown' && (
+          <p><strong>Camera:</strong> {cameraType === 'front' ? '🤳 Front Camera' : '📷 Back Camera'}</p>
+        )}
       </div>
 
       <video
@@ -318,7 +367,9 @@ const handleConnect = async () => {
           border: '2px solid #333',
           background: '#000',
           borderRadius: 8,
-          transform: 'scaleX(-1)',
+          // Only mirror front camera preview for user comfort
+          // Back camera should not be mirrored
+          transform: cameraOpened && cameraType === 'front' ? 'scaleX(-1)' : 'none',
           display: 'block',
           margin: '0 auto'
         }}
