@@ -358,6 +358,7 @@ class ObjectDetector {
 
 // Helper function to draw detections on canvas with orientation handling
 export function drawDetections(ctx, detections, videoWidth, videoHeight, canvasWidth, canvasHeight, videoOrientation = 'landscape', isVideoMirrored = false) {
+  // Clear canvas each frame before drawing
   ctx.clearRect(0, 0, canvasWidth, canvasHeight)
   
   // Show error message if model failed to load
@@ -375,8 +376,9 @@ export function drawDetections(ctx, detections, videoWidth, videoHeight, canvasW
   
   if (!detections || detections.length === 0) return
 
-  ctx.font = '16px Arial'
-  ctx.lineWidth = 2
+  // Set up drawing styles for large, readable labels
+  ctx.font = '24px Arial' // Increased from 16px for better readability
+  ctx.lineWidth = 3 // Slightly thicker bounding box lines
 
   // Canvas is always 1280×720 (landscape)
   // We need to map video coordinates to canvas coordinates based on orientation
@@ -454,31 +456,40 @@ export function drawDetections(ctx, detections, videoWidth, videoHeight, canvasW
   }
 }
 
-// Helper function to draw a single bounding box
+// Helper function to draw a single bounding box with large, readable labels
 function drawBoundingBox(ctx, x, y, width, height, className, confidence, classId, index) {
-  // Choose color based on class
+  // Choose distinct color based on class
   const colorIndex = (classId >= 0 ? classId : index) % CLASS_COLORS.length
   const color = CLASS_COLORS[colorIndex]
   
-  // Draw semi-transparent background
+  // Draw semi-transparent background for bounding box
   ctx.fillStyle = color + '40'
   ctx.fillRect(x, y, width, height)
 
-  // Draw border
+  // Draw bounding box border
   ctx.strokeStyle = color
   ctx.strokeRect(x, y, width, height)
 
-  // Draw label
+  // Draw object label in large, readable text
   const label = `${className} (${(confidence * 100).toFixed(1)}%)`
-  const labelWidth = ctx.measureText(label).width
   
-  // Label background
-  ctx.fillStyle = color
-  ctx.fillRect(x, y - 20, labelWidth + 8, 18)
-
-  // Label text
+  // Measure text for background sizing
+  const textMetrics = ctx.measureText(label)
+  const textWidth = textMetrics.width
+  const textHeight = 24 // Font size
+  
+  // Draw background for text to improve readability
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)' // Semi-transparent black background
+  ctx.fillRect(x, y - textHeight - 6, textWidth + 12, textHeight + 6)
+  
+  // Draw label text in white for high contrast
   ctx.fillStyle = 'white'
-  ctx.fillText(label, x + 4, y - 6)
+  ctx.fillText(label, x + 6, y - 8)
+  
+  // Optional: Add colored border around text background
+  ctx.strokeStyle = color
+  ctx.lineWidth = 2
+  ctx.strokeRect(x, y - textHeight - 6, textWidth + 12, textHeight + 6)
 }
 
 // Create and export detector instance

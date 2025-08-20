@@ -228,6 +228,11 @@ app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
 async def index():
     return FileResponse(DIST_DIR / "index.html")
 
+# HUD-enabled version for testing Phase 5
+@app.get("/hud")
+async def hud_version():
+    return FileResponse(DIST_DIR / "hud-integration.html")
+
 @app.get("/join/{room_id}")
 async def spa_join(room_id: str):
     return FileResponse(DIST_DIR / "index.html")

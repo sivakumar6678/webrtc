@@ -2,6 +2,8 @@
 import { useState, useEffect, useRef } from 'react'
 import QRCode from 'qrcode'
 import { detector, drawDetections } from './detection.js'
+import { metricsTracker } from './metrics.js'
+import HUD from './HUD.jsx'
 function DesktopPage() {
   const [roomId, setRoomId] = useState('')
   const [qrCodeUrl, setQrCodeUrl] = useState('')
@@ -14,6 +16,14 @@ function DesktopPage() {
   const [detectionCount, setDetectionCount] = useState(0)
   const [rawDetectionCount, setRawDetectionCount] = useState(0)
   const [memoryInfo, setMemoryInfo] = useState({ numTensors: 0, numBytes: 0 })
+  
+  // HUD metrics state
+  const [hudMetrics, setHudMetrics] = useState({
+    fps: 0,
+    latency: { median: 0, p95: 0 },
+    bandwidth: { uplink: 0, downlink: 0 },
+    isLowFps: false
+  })
   
   // Video orientation and mirroring state
   const [videoOrientation, setVideoOrientation] = useState('landscape') // 'portrait' or 'landscape'
@@ -50,10 +60,18 @@ function DesktopPage() {
     // Initialize WebSocket
     initializeWebSocket(newRoomId)
 
+    // Start HUD metrics update interval
+    const metricsInterval = setInterval(() => {
+      const metrics = metricsTracker.getMetrics()
+      setHudMetrics(metrics)
+      metricsTracker.logMetrics() // Console logging every 5s
+    }, 1000) // Update HUD every 1s
+
     return () => {
       websocketRef.current?.close()
       peerConnectionRef.current?.close()
       isDetectionRunning.current = false
+      clearInterval(metricsInterval)
     }
   }, [])
 
@@ -102,10 +120,18 @@ useEffect(() => {
     canvas.width = 1280
     canvas.height = 720
 
-    // Canvas display size matches video element size
+    // Canvas display size exactly matches video element size for perfect overlay
     const videoRect = video.getBoundingClientRect()
     canvas.style.width = `${videoRect.width}px`
     canvas.style.height = `${videoRect.height}px`
+    
+    // Log canvas size update for debugging alignment
+    console.log('[Desktop] Canvas resized to match video:', {
+      canvasInternal: `${canvas.width}×${canvas.height}`,
+      canvasDisplay: `${videoRect.width}×${videoRect.height}`,
+      videoElement: `${video.offsetWidth}×${video.offsetHeight}`,
+      videoStream: `${video.videoWidth}×${video.videoHeight}`
+    })
     
     // Detect and update video orientation
     if (video.videoWidth && video.videoHeight) {
@@ -118,8 +144,12 @@ useEffect(() => {
     }
   }
 
-  // FPS calculation - fixed to avoid "0 FPS" bug
+  // FPS calculation - integrated with metrics tracker
   function updateFPS() {
+    // Update metrics tracker FPS
+    metricsTracker.updateFPS()
+    
+    // Legacy FPS for existing UI (keep for compatibility)
     fpsFrameCount.current++
     const now = performance.now()
     const elapsed = now - lastFpsTime.current
@@ -144,6 +174,9 @@ useEffect(() => {
     if (video.videoWidth && video.videoHeight) {
       resizeCanvas()
       updateFPS()
+      
+      // Update bandwidth metrics
+      metricsTracker.updateBandwidth()
 
       // Always try to run detection if model is loaded and video is ready
       if (video.readyState >= 2) {
@@ -154,9 +187,16 @@ useEffect(() => {
             // Use SSD MobileNet v2 with confidence threshold >= 0.8
             const detectionStart = performance.now()
             detectionResult = await detector.detect(video, 300, 300, 0.8)
+            const detectionEnd = performance.now()
+            const endToEndLatency = detectionEnd - detectionStart
+            
+            // Update metrics tracker with latency
+            metricsTracker.addLatency(endToEndLatency)
             
             if (detectionResult.latency) {
               detectionLatency.current = detectionResult.latency
+            } else {
+              detectionLatency.current = endToEndLatency
             }
             
             // Handle skipped frames (for performance)
@@ -281,6 +321,9 @@ useEffect(() => {
     const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
     const pc = new RTCPeerConnection(configuration)
     peerConnectionRef.current = pc
+    
+    // Set peer connection for metrics tracking
+    metricsTracker.setPeerConnection(pc)
 
     // Receive-only transceiver (desktop has no local tracks)
     pc.addTransceiver('video', { direction: 'recvonly' })
@@ -433,7 +476,8 @@ useEffect(() => {
           justifyContent: 'center',
           alignItems: 'center'
         }}>
-          <div style={{ 
+          {/* Video Container - Perfect alignment wrapper */}
+          <div className="video-container" style={{ 
             position: 'relative', 
             display: 'inline-block',
             width: '100%',
@@ -503,10 +547,15 @@ useEffect(() => {
                 height: '100%',
                 pointerEvents: 'none',
                 zIndex: 2,
+                // Canvas exactly overlays video on any screen size
+                objectFit: 'contain',
                 // Canvas is always 1280×720 but scales to match video display
                 // transform: 'scaleX(-1)', // Don't mirror canvas - detections should align with video
               }}
             />
+            
+            {/* HUD Overlay */}
+            <HUD metrics={hudMetrics} />
           </div>
 
             
