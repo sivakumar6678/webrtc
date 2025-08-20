@@ -3,10 +3,12 @@ import { useState, useEffect, useRef } from 'react'
 import QRCode from 'qrcode'
 function drawDummyBoxes(ctx, width, height) {
   ctx.clearRect(0, 0, width, height)
-  ctx.strokeStyle = 'red'
-  ctx.lineWidth = 3
-  ctx.font = '16px Arial'
-  ctx.fillStyle = 'red'
+  ctx.strokeStyle = 'lime'
+  ctx.lineWidth = 2
+  ctx.font = '14px Arial'
+  ctx.fillStyle = 'lime'
+
+
 
   const boxes = [
     { x: width * 0.1, y: height * 0.2, w: 100, h: 80, label: 'Object 1' },
@@ -15,8 +17,22 @@ function drawDummyBoxes(ctx, width, height) {
   ]
 
   boxes.forEach(b => {
+   
+    // Semi-transparent background
+    ctx.fillStyle = 'rgba(0,255,0,0.2)'
+    ctx.fillRect(b.x, b.y, b.w, b.h)
+
+    // Border
+    ctx.strokeStyle = 'lime'
     ctx.strokeRect(b.x, b.y, b.w, b.h)
-    ctx.fillText(b.label, b.x, b.y - 5)
+
+    // Label background
+    ctx.fillStyle = 'lime'
+    ctx.fillRect(b.x, b.y - 18, ctx.measureText(b.label).width + 6, 16)
+
+    // Label text
+    ctx.fillStyle = 'black'
+    ctx.fillText(b.label, b.x + 3, b.y - 5)
   })
 }
 function DesktopPage() {
@@ -49,16 +65,7 @@ function DesktopPage() {
       peerConnectionRef.current?.close()
     }
   }, [])
-// useEffect(() => {
-//   if (!pc) return
-//   pc.ontrack = (event) => {
-//     console.log('[Desktop] ontrack fired')
-//     if (videoRef.current) {
-//       videoRef.current.srcObject = event.streams[0]
-//       console.log('[Desktop] Video stream attached')
-//     }
-//   }
-// }, [pc])
+
 // === Canvas overlay effect ===
 useEffect(() => {
   const video = videoRef.current
@@ -68,9 +75,16 @@ useEffect(() => {
   const ctx = canvas.getContext('2d')
 
   function resizeCanvas() {
-    canvas.width = video.videoWidth || 640
-    canvas.height = video.videoHeight || 480
-  }
+  // Internal resolution
+  canvas.width = video.videoWidth || 640
+  canvas.height = video.videoHeight || 480
+
+  // Match display size with rendered video
+  canvas.style.width = `${video.clientWidth}px`
+  canvas.style.height = `${video.clientHeight}px`
+}
+
+
 
   function render() {
     if (video.videoWidth && video.videoHeight) {
@@ -203,7 +217,7 @@ useEffect(() => {
 
         {/* Main video viewer */}
         <div style={{ width: '100%', marginBottom: 16 }}>
-          {/* <div style={{ position: 'relative', display: 'inline-block' }}> */}
+          <div style={{ position: 'relative', display: 'inline-block', width: '100%' }}>
             <video
               ref={videoRef}
               autoPlay
@@ -228,7 +242,7 @@ useEffect(() => {
                 pointerEvents: 'none',
               }}
             />
-          {/* </div> */}
+          </div>
 
             
         </div>
