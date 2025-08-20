@@ -1,9 +1,12 @@
+# Builds / envs / deps
+dist/
+venv/
+node_modules/
+
+# Project docs and generated summaries
 FIXES_SUMMARY.md
 IMPLEMENTATION_SUMMARY.md
-README.md
-TODO.md
-qr_test.html
-test_qr_simple.html
-test_qr.html
 TASK_SPEC.md
-frontend/dist/
+
+# Throwaway test files
+qr_test*.html

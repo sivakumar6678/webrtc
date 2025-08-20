@@ -1,3 +1,4 @@
+// frontend/src/components/DesktopPage.jsx
 import { useState, useEffect, useRef } from 'react'
 import QRCode from 'qrcode'
 
@@ -8,17 +9,19 @@ function DesktopPage() {
   const videoRef = useRef(null)
   const peerConnectionRef = useRef(null)
   const websocketRef = useRef(null)
+  const roomIdRef = useRef('') // avoid stale closures
 
   useEffect(() => {
-    // Generate UUID-ish roomId
+    // Generate roomId
     const newRoomId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
     setRoomId(newRoomId)
+    roomIdRef.current = newRoomId
 
-    // Generate QR code for phone join URL
+    // Generate QR for phone join URL
     const joinUrl = `${window.location.origin}/join/${newRoomId}`
     QRCode.toDataURL(joinUrl)
       .then(url => setQrCodeUrl(url))
-      .catch(err => console.error('QR error:', err))
+      .catch(err => console.error('[Desktop] QR error:', err))
 
     // Initialize WebSocket
     initializeWebSocket(newRoomId)
@@ -33,20 +36,21 @@ function DesktopPage() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const wsUrl = `${protocol}//${window.location.host}/ws`
 
-    websocketRef.current = new WebSocket(wsUrl)
+    const ws = new WebSocket(wsUrl)
+    websocketRef.current = ws
 
-    websocketRef.current.onopen = () => {
-      console.log('WS connected')
-      websocketRef.current.send(JSON.stringify({
+    ws.onopen = () => {
+      console.log('[Desktop] WS connected')
+      ws.send(JSON.stringify({
         type: 'join',
         role: 'desktop',
         roomId: rid,
       }))
     }
 
-    websocketRef.current.onmessage = async (event) => {
+    ws.onmessage = async (event) => {
       const msg = JSON.parse(event.data)
-      console.log('WS message:', msg)
+      console.log('[Desktop] WS message:', msg)
 
       if (msg.type === 'offer') {
         await handleOffer(msg)
@@ -55,8 +59,8 @@ function DesktopPage() {
       }
     }
 
-    websocketRef.current.onerror = (e) => {
-      console.error('WS error', e)
+    ws.onerror = (e) => {
+      console.error('[Desktop] WS error', e)
       setConnectionStatus('Connection error')
     }
   }
@@ -67,17 +71,19 @@ function DesktopPage() {
     const pc = new RTCPeerConnection(configuration)
     peerConnectionRef.current = pc
 
-    // Explicitly receive only (no local tracks on desktop)
+    // Receive-only transceiver (desktop has no local tracks)
     pc.addTransceiver('video', { direction: 'recvonly' })
+    console.log('[Desktop] Transceiver added (recvonly)')
 
     pc.ontrack = (event) => {
-      console.log('Remote track received', event.streams)
+      console.log('[Desktop] Remote track received', event.streams)
       if (videoRef.current) {
         videoRef.current.srcObject = event.streams[0]
-        console.log('[Desktop] videoRef.srcObject assigned')
-        // Ensure playback on some browsers
+        console.log('[Desktop] videoRef.srcObject assigned (ontrack)')
         const v = videoRef.current
         const tryPlay = () => v.play().catch(() => setTimeout(tryPlay, 300))
+        // Try both immediate play and on metadata
+        tryPlay()
         v.onloadedmetadata = () => tryPlay()
         setConnectionStatus('Streaming')
       }
@@ -87,15 +93,24 @@ function DesktopPage() {
       if (event.candidate) {
         websocketRef.current?.send(JSON.stringify({
           type: 'ice-candidate',
-          roomId,
+          roomId: roomIdRef.current,
           candidate: event.candidate,
         }))
       }
     }
 
-    pc.onconnectionstatechange = () => {
-      console.log('PC state:', pc.connectionState)
+       pc.onconnectionstatechange = () => {
+      console.log('[Desktop] PC state:', pc.connectionState)
+      if (pc.connectionState === 'connected') {
+        setConnectionStatus('✅ Connected successfully')
+      } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+        setConnectionStatus('❌ Phone disconnected')
+        if (videoRef.current) {
+          videoRef.current.srcObject = null
+        }
+      }
     }
+
   }
 
   const handleOffer = async ({ sdp }) => {
@@ -106,9 +121,10 @@ function DesktopPage() {
     await pc.setLocalDescription(answer)
     websocketRef.current?.send(JSON.stringify({
       type: 'answer',
-      roomId,
+      roomId: roomIdRef.current,
       sdp: answer.sdp,
     }))
+    console.log('[Desktop] Answer created & sent')
   }
 
   const handleIceCandidate = async (candidate) => {
@@ -118,7 +134,7 @@ function DesktopPage() {
     try {
       await pc.addIceCandidate(candidate)
     } catch (e) {
-      console.warn('addIceCandidate failed', e)
+      console.warn('[Desktop] addIceCandidate failed', e)
     }
   }
 
@@ -128,18 +144,26 @@ function DesktopPage() {
         <h2 style={{ textAlign: 'center' }}>Desktop Viewer</h2>
 
         <div style={{ marginBottom: 12, textAlign: 'center' }}>
-          <p><strong>Room:</strong> {roomId}</p>
-          <p><strong>Status:</strong> {connectionStatus}</p>
+          <p style={{ color: '#fff' }}><strong>Room:</strong> {roomId}</p>
+          <p style={{ color: '#fff' }}><strong>Status:</strong> {connectionStatus}</p>
         </div>
 
-        {/* Video on top, responsive full width */}
+
+        {/* Main video viewer */}
         <div style={{ width: '100%', marginBottom: 16 }}>
           <video
             ref={videoRef}
             autoPlay
             playsInline
             muted
-            style={{ width: '100%', height: 'auto', maxHeight: '70vh', border: '2px solid #333', background: '#000' }}
+            style={{
+              width: '100%',
+              height: 'auto',
+              maxHeight: '70vh',
+              border: '2px solid #333',
+              background: '#000',
+              borderRadius: 8,
+            }}
           />
         </div>
 
@@ -147,11 +171,18 @@ function DesktopPage() {
         <div style={{ textAlign: 'center' }}>
           <h3>Scan with phone</h3>
           {qrCodeUrl && (
-            <img src={qrCodeUrl} alt="QR" style={{ border: '1px solid #ccc', padding: 10, maxWidth: 256, width: '100%', height: 'auto' }} />
+            <img
+              src={qrCodeUrl}
+              alt="QR"
+              style={{ border: '1px solid #ccc', padding: 10, maxWidth: 256, width: '100%', height: 'auto', borderRadius: 8 }}
+            />
           )}
-          <p style={{ fontSize: 12, color: '#666', marginTop: 10 }}>
-            Or open: {window.location.origin}/join/{roomId}
+          <p style={{ fontSize: 14, color: '#000000ff', marginTop: 10 }}>
+            Or open: <a style={{ color: '#fffb00ff' }} href={`${window.location.origin}/join/${roomId}`} target="_blank" rel="noreferrer">
+              {window.location.origin}/join/{roomId}
+            </a>
           </p>
+
         </div>
       </div>
     </div>
