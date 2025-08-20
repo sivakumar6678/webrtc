@@ -42,8 +42,8 @@ function HUD({ metrics, style = {} }) {
   return (
     <div style={{
       position: 'absolute',
-      top: '10px',
-      left: '10px',
+      top: '0px',
+      left: '-250px',
       zIndex: 10,
       backgroundColor: 'rgba(0, 0, 0, 0.8)',
       color: '#fff',

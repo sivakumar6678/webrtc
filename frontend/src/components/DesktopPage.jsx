@@ -45,6 +45,16 @@ function DesktopPage() {
   const fpsFrameCount = useRef(0)
   const lastFpsTime = useRef(performance.now())
 
+  // Phase 6: Metrics collection store (in-memory)
+  const metricsStoreRef = useRef({
+    fps: [],
+    latencyMs: [],
+    detectionCountPerFrame: [],
+    detectionsByFrame: []
+  })
+  const frameIndexRef = useRef(0)
+  const currentFpsRef = useRef(0)
+
   useEffect(() => {
     // Generate roomId
     const newRoomId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -65,6 +75,15 @@ function DesktopPage() {
       const metrics = metricsTracker.getMetrics()
       setHudMetrics(metrics)
       metricsTracker.logMetrics() // Console logging every 5s
+      
+      // Log live metrics updates occasionally
+      if (Math.random() < 0.1) { // Log ~10% of updates
+        console.log('[Desktop] Live metrics updated:', {
+          fps: metrics.fps,
+          latency: `${metrics.latency.median}ms (p95: ${metrics.latency.p95}ms)`,
+          bandwidth: `↓${metrics.bandwidth.downlink}kbps ↑${metrics.bandwidth.uplink}kbps`
+        })
+      }
     }, 1000) // Update HUD every 1s
 
     return () => {
@@ -116,20 +135,19 @@ useEffect(() => {
   isDetectionRunning.current = true
 
   function resizeCanvas() {
-    // Always force canvas to 1280×720 (landscape) for consistent desktop display
-    canvas.width = 1280
-    canvas.height = 720
+    // Set canvas internal resolution to match fixed video size (640×480)
+    canvas.width = 640
+    canvas.height = 480
 
-    // Canvas display size exactly matches video element size for perfect overlay
-    const videoRect = video.getBoundingClientRect()
-    canvas.style.width = `${videoRect.width}px`
-    canvas.style.height = `${videoRect.height}px`
+    // Canvas display size is fixed to match video element (640×480)
+    canvas.style.width = '640px'
+    canvas.style.height = '480px'
     
     // Log canvas size update for debugging alignment
-    console.log('[Desktop] Canvas resized to match video:', {
+    console.log('[Desktop] Canvas resized for centered layout:', {
       canvasInternal: `${canvas.width}×${canvas.height}`,
-      canvasDisplay: `${videoRect.width}×${videoRect.height}`,
-      videoElement: `${video.offsetWidth}×${video.offsetHeight}`,
+      canvasDisplay: `${canvas.style.width}×${canvas.style.height}`,
+      videoElement: `640px×480px`,
       videoStream: `${video.videoWidth}×${video.videoHeight}`
     })
     
@@ -139,7 +157,7 @@ useEffect(() => {
       
       if (newOrientation !== videoOrientation) {
         setVideoOrientation(newOrientation)
-        console.log('[Desktop] Video orientation changed to:', newOrientation, `(${video.videoWidth}×${video.videoHeight}) -> Canvas: 1280×720`)
+        console.log('[Desktop] Video orientation changed to:', newOrientation, `(${video.videoWidth}×${video.videoHeight}) -> Canvas: 640×480`)
       }
     }
   }
@@ -156,7 +174,12 @@ useEffect(() => {
     
     if (elapsed >= 1000) { // Update every second
       const currentFps = Math.round((fpsFrameCount.current * 1000) / elapsed)
-      setFps(currentFps > 0 ? currentFps : 1) // Avoid 0 FPS display
+      const safeFps = currentFps > 0 ? currentFps : 1
+      currentFpsRef.current = safeFps
+      setFps(safeFps) // Avoid 0 FPS display
+      // Phase 6: store per-second FPS sample
+      metricsStoreRef.current.fps.push(safeFps)
+
       fpsFrameCount.current = 0
       lastFpsTime.current = now
       
@@ -259,6 +282,20 @@ useEffect(() => {
         videoOrientation,
         isVideoMirrored
       )
+
+      // Phase 6: collect per-frame metrics in memory
+      const objectsMap = {}
+      for (const d of lastDetections.current) {
+        const key = d.className || 'unknown'
+        objectsMap[key] = (objectsMap[key] || 0) + 1
+      }
+      metricsStoreRef.current.latencyMs.push(Number(detectionLatency.current) || 0)
+      metricsStoreRef.current.detectionCountPerFrame.push(lastDetections.current.length)
+      metricsStoreRef.current.detectionsByFrame.push({
+        frame: frameIndexRef.current + 1,
+        objects: objectsMap
+      })
+      frameIndexRef.current += 1
     }
 
     if (isDetectionRunning.current) {
@@ -266,7 +303,7 @@ useEffect(() => {
     }
   }
 
-  console.log('[Desktop] Canvas overlay with detection initialized')
+  console.log('[Desktop] Canvas overlay with detection initialized (centered layout)')
   render()
 
   return () => {
@@ -430,154 +467,222 @@ useEffect(() => {
     }
   }
 
+  // Phase 6: Export metrics to JSON and trigger download
+  const exportMetrics = () => {
+    const store = metricsStoreRef.current
+    const payload = {
+      frameCount: frameIndexRef.current,
+      fps: store.fps, // per-second samples
+      latencyMs: store.latencyMs, // per-frame
+      detections: store.detectionsByFrame // per-frame objects map
+    }
+
+    // Log summary before export
+    const totalDetections = store.detectionCountPerFrame.reduce((a, b) => a + b, 0)
+    console.log('[Export] Frames:', payload.frameCount)
+    console.log('[Export] FPS samples:', store.fps.length, store.fps)
+    console.log('[Export] Latency samples:', store.latencyMs.length)
+    console.log('[Export] Total detections across frames:', totalDetections)
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'metrics.json'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
   return (
-    <div style={{ padding: 16 }}>
-      <div style={{ maxWidth: 1200, margin: '0 auto' }}>
-        <h2 style={{ textAlign: 'center' }}>Desktop Viewer</h2>
-
-        <div style={{ marginBottom: 12, textAlign: 'center' }}>
-          <p style={{ color: '#fff' }}><strong>Room:</strong> {roomId}</p>
-          <p style={{ color: '#fff' }}><strong>Connection:</strong> {connectionStatus}</p>
-          <p style={{ color: '#fff' }}><strong>Model:</strong> {modelStatus}</p>
-          <p style={{ color: '#fff' }}><strong>Detection:</strong> {detectionStatus}</p>
-          <p style={{ color: '#fff' }}>
-            <strong>Orientation:</strong> {videoOrientation === 'portrait' ? '📱 Portrait' : '📺 Landscape'}
-            {cameraType !== 'unknown' && ` | Camera: ${cameraType === 'front' ? '🤳 Front' : '📷 Back'}`}
-            {isVideoMirrored && ' | 🪞 Mirrored'}
-          </p>
+    <div 
+      className="video-wrapper" 
+      style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        width: '100vw',
+        height: '100vh',
+        position: 'relative',
+      }}
+    >
+      {/* Status Info Overlay - Top Left */}
+      <div style={{
+        position: 'absolute',
+        top: 20,
+        left: 20,
+        zIndex: 10,
+        color: '#fff',
+        fontSize: '12px',
+        backgroundColor: 'rgba(0,0,0,0.8)',
+        padding: '10px',
+        borderRadius: '8px',
+        maxWidth: '300px'
+      }}>
+        <div><strong>Room:</strong> {roomId}</div>
+        <div><strong>Status:</strong> {connectionStatus}</div>
+        <div><strong>Model:</strong> {modelStatus}</div>
+        <div><strong>Detection:</strong> {detectionStatus}</div>
+        <div>
+          <strong>Orientation:</strong> {videoOrientation === 'portrait' ? '📱 Portrait' : '📺 Landscape'}
+          {cameraType !== 'unknown' && ` | ${cameraType === 'front' ? '🤳 Front' : '📷 Back'}`}
+          {isVideoMirrored && ' | 🪞 Mirrored'}
         </div>
+      </div>
 
-        {/* Performance metrics */}
-        <div style={{ marginBottom: 12, textAlign: 'center', fontSize: '14px' }}>
-          <div style={{ 
-            display: 'inline-flex', 
-            gap: '15px', 
-            backgroundColor: 'rgba(0,0,0,0.8)', 
-            padding: '10px 20px', 
-            borderRadius: '8px',
-            flexWrap: 'wrap',
-            justifyContent: 'center'
-          }}>
-            <span style={{ color: '#00ff00' }}>FPS: {fps}</span>
-            <span style={{ color: '#ffff00' }}>Objects: {detectionCount}</span>
-            <span style={{ color: '#ff99ff' }}>Raw: {rawDetectionCount}</span>
-            <span style={{ color: '#00ffff' }}>Latency: {detectionLatency.current.toFixed(1)}ms</span>
-            <span style={{ color: '#ff9900' }}>Tensors: {memoryInfo.numTensors}</span>
-            <span style={{ color: '#ff6600' }}>Memory: {(memoryInfo.numBytes / 1024 / 1024).toFixed(1)}MB</span>
-          </div>
-        </div>
-
-
-        {/* Main video viewer - Always landscape display */}
-        <div style={{ 
-          width: '100%', 
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center'
+      {/* Live Metrics Overlay - Top Right (Outside Video Container) */}
+      <div className="metrics" style={{
+        position: 'absolute',
+        top: 10,
+        right: 10,
+        zIndex: 3,
+        fontSize: '14px',
+        backgroundColor: 'rgba(0,0,0,0.9)',
+        padding: '12px',
+        borderRadius: '8px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '6px',
+        color: 'white',
+        fontFamily: 'monospace',
+        minWidth: '220px'
+      }}>
+        <div style={{ color: '#00ff00', fontWeight: 'bold' }}>📊 LIVE METRICS</div>
+        <div style={{ color: '#00ff00' }}>FPS: {fps}</div>
+        <div style={{ color: '#ffff00' }}>Objects: {detectionCount}</div>
+        <div style={{ color: '#ff99ff' }}>Raw: {rawDetectionCount}</div>
+        <div style={{ color: '#00ffff' }}>Latency: {detectionLatency.current.toFixed(1)}ms</div>
+        <div style={{ color: '#ff9900' }}>Tensors: {memoryInfo.numTensors}</div>
+        <div style={{ color: '#ff6600' }}>Memory: {(memoryInfo.numBytes / 1024 / 1024).toFixed(1)}MB</div>
+        <button onClick={exportMetrics} style={{
+          marginTop: '6px',
+          background: '#1e90ff',
+          color: 'white',
+          border: 'none',
+          padding: '6px 8px',
+          borderRadius: '6px',
+          cursor: 'pointer'
         }}>
-          {/* Video Container - Perfect alignment wrapper */}
-          <div className="video-container" style={{ 
-            position: 'relative', 
-            display: 'inline-block',
-            width: '100%',
-            maxWidth: '100%',
-            transition: 'all 0.3s ease'
+          Download Metrics
+        </button>
+      </div>
+
+      {/* QR Code Overlay - Bottom Right */}
+      <div style={{
+        position: 'absolute',
+        bottom: 20,
+        right: 20,
+        zIndex: 10,
+        textAlign: 'center',
+        backgroundColor: 'rgba(63, 56, 56, 0.8)',
+        padding: '15px',
+        borderRadius: '8px',
+        color: '#fff'
+      }}>
+        <h4 style={{ margin: '0 0 10px 0', fontSize: '18px' }}>Scan with phone</h4>
+        {qrCodeUrl && (
+          <img
+            src={qrCodeUrl}
+            alt="QR"
+            style={{ 
+              border: '1px solid #ccc', 
+              padding: 5, 
+              width: '160px', 
+              height: '160px', 
+              // borderRadius: 4,
+              // backgroundColor: '#fff'
+            }}
+          />
+        )}
+        <p style={{ fontSize: 12, color: '#dbd8d8e8', margin: 5, maxWidth: '120px' }}>
+          Or open: <a style={{ color: '#fffb00ff' }} href={`${window.location.origin}/join/${roomId}`} target="_blank" rel="noreferrer">
+            {window.location.origin}/join/{roomId}
+          </a>
+        </p>
+      </div>
+
+      {/* Centered Video + Canvas Container - Perfect Alignment */}
+      <div style={{ 
+        position: 'relative',
+        width: '640px',
+        height: '480px'
+      }}>
+        {/* Placeholder when no video */}
+        {connectionStatus === 'Waiting for connection...' && (
+          <div style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            zIndex: 3,
+            color: '#fff',
+            fontSize: '18px',
+            textAlign: 'center',
+            background: 'rgba(0,0,0,0.7)',
+            padding: '20px',
+            borderRadius: '10px'
           }}>
-            {/* Placeholder when no video */}
-            {connectionStatus === 'Waiting for connection...' && (
-              <div style={{
-                position: 'absolute',
-                top: '50%',
-                left: '50%',
-                transform: 'translate(-50%, -50%)',
-                zIndex: 3,
-                color: '#fff',
-                fontSize: '18px',
-                textAlign: 'center',
-                background: 'rgba(0,0,0,0.7)',
-                padding: '20px',
-                borderRadius: '10px'
-              }}>
-                📱 Waiting for phone to connect...<br/>
-                <small>Scan QR code below</small>
-              </div>
-            )}
-            
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              controls={false}
-              style={{
-                width: '100%',
-                height: 'auto',
-                maxHeight: '70vh',
-                minHeight: '300px',
-                borderRadius: 8,
-                background: 'linear-gradient(45deg, #1a1a1a 25%, transparent 25%), linear-gradient(-45deg, #1a1a1a 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #1a1a1a 75%), linear-gradient(-45deg, transparent 75%, #1a1a1a 75%)',
-                backgroundSize: '20px 20px',
-                backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px',
-                border: '2px solid #333',
-                // Apply transformations based on orientation and camera type
-                transform: `
-                  ${videoOrientation === 'portrait' ? 'rotate(-90deg)' : ''} 
-                  ${isVideoMirrored ? 'scaleX(-1)' : ''}
-                `.trim(),
-                display: 'block',
-                zIndex: 1,
-                objectFit: 'contain',
-                transition: 'all 0.3s ease',
-                // Adjust size when rotated from portrait to landscape
-                ...(videoOrientation === 'portrait' && {
-                  width: 'auto',
-                  height: '70vh',
-                  maxWidth: '100%',
-                })
-              }}
-            />
-            <canvas
-              ref={canvasRef}
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: '100%',
-                pointerEvents: 'none',
-                zIndex: 2,
-                // Canvas exactly overlays video on any screen size
-                objectFit: 'contain',
-                // Canvas is always 1280×720 but scales to match video display
-                // transform: 'scaleX(-1)', // Don't mirror canvas - detections should align with video
-              }}
-            />
-            
-            {/* HUD Overlay */}
-            <HUD metrics={hudMetrics} />
+            📱 Waiting for phone to connect...<br/>
+            <small>Scan QR code in bottom right</small>
           </div>
-
-            
-        </div>
-
-        {/* QR below video */}
-        <div style={{ textAlign: 'center' }}>
-          <h3>Scan with phone</h3>
-          {qrCodeUrl && (
-            <img
-              src={qrCodeUrl}
-              alt="QR"
-              style={{ border: '1px solid #ccc', padding: 10, maxWidth: 256, width: '100%', height: 'auto', borderRadius: 8 }}
-            />
-          )}
-          <p style={{ fontSize: 14, color: '#000000ff', marginTop: 10 }}>
-            Or open: <a style={{ color: '#fffb00ff' }} href={`${window.location.origin}/join/${roomId}`} target="_blank" rel="noreferrer">
-              {window.location.origin}/join/{roomId}
-            </a>
-          </p>
-
-        </div>
+        )}
+        
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          controls={false}
+          style={{
+            width: '640px',
+            height: '480px',
+            borderRadius: 8,
+            background: 'linear-gradient(45deg, #0d3ee0ff 25%, transparent 25%), linear-gradient(-45deg, #1a1a1aff 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #f10000ff 75%), linear-gradient(-45deg, transparent 75%, #1a1a1a 75%)',
+            backgroundSize: '20px 20px',
+            backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px',
+            border: '2px solid #333',
+            // Apply transformations based on orientation and camera type
+            transform: `
+              ${videoOrientation === 'portrait' ? 'rotate(-90deg)' : ''} 
+              ${isVideoMirrored ? 'scaleX(-1)' : ''}
+            `.trim(),
+            display: 'block',
+            zIndex: 1,
+            objectFit: 'cover'
+          }}
+        />
+        <canvas
+          ref={canvasRef}
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '640px',
+            height: '480px',
+            pointerEvents: 'none',
+            zIndex: 2
+          }}
+        />
+        
+        {/* HUD Overlay */}
+        <HUD metrics={hudMetrics} />
+      </div>
+      
+      {/* Additional Live Metrics Display - Bottom Left (Outside Container) */}
+      <div style={{
+        position: 'absolute',
+        bottom: 20,
+        left: 20,
+        zIndex: 10,
+        fontSize: '12px',
+        backgroundColor: 'rgba(0,0,0,0.8)',
+        padding: '8px 12px',
+        borderRadius: '6px',
+        color: 'white',
+        fontFamily: 'monospace'
+      }}>
+        FPS: {fps} | Latency: {detectionLatency.current.toFixed(1)}ms | Objects: {detectionCount}
       </div>
     </div>
   )

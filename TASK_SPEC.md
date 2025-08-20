@@ -101,3 +101,34 @@ Build a system where:
 - 🔄 Robustness: Backpressure handling (drop old frames).
 - 📄 Documentation: Clear README, reproducible setup.
 - 💡 Reasoning: Explain trade-offs & improvements in Loom video.
+
+## ⚠️ Important Running Instructions
+
+- **Do not run or build the code automatically.**
+- The project must **only be built and run manually** by the assigned developer.
+- To test the application:
+  1. Stop any previously running instance.
+  2. Manually start the backend (`./start.sh` or equivalent).
+  3. Launch the frontend after backend is running.
+  4. Repeat stop/start manually whenever needed.
+- Automatic builds or runs are **not allowed** to avoid conflicts and ensure proper sequence.
+1. **Manual Build & Run Only**
+   - AI agents **must not build or run the code automatically**.
+   - All code execution, starting/stopping servers, or building the frontend is done **manually by the user**.
+   - Example instruction for agent: “Do not execute `npm run build` or `./start.sh` on your own.”
+
+2. **Single MD Update File**
+   - If the agent wants to **add improvements, notes, or updates**, it should create a **single markdown file** (e.g., `TASK_UPDATES.md`).
+   - Include:
+     - **Heading** for the update section.
+     - **Timestamp** when the update was made.
+     - All updates in that file; do **not create multiple .md files**.
+
+3. **Maintain Existing Structure**
+   - Do not modify other sections of `TASK_SPEC.md`.
+   - Only update instructions related to running, building, or file creation behavior.
+
+4. **Example Note for Agent**
+   - Instead of running code, it can suggest:
+     > “To test DesktopPage.jsx with canvas overlay, run `./start.sh` manually after saving changes, then reload the browser.”
+   - Log all improvement notes in `TASK_UPDATES.md` only.

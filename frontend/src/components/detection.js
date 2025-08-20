@@ -377,10 +377,15 @@ export function drawDetections(ctx, detections, videoWidth, videoHeight, canvasW
   if (!detections || detections.length === 0) return
 
   // Set up drawing styles for large, readable labels
-  ctx.font = '24px Arial' // Increased from 16px for better readability
+  ctx.font = '28px Arial' // Increased to 28px for better readability in centered layout
   ctx.lineWidth = 3 // Slightly thicker bounding box lines
+  
+  // Log frame drawing occasionally for debugging
+  if (Math.random() < 0.01) { // Log ~1% of frames
+    console.log(`[Detection] Drawing ${detections.length} detections with 28px labels on ${canvasWidth}×${canvasHeight} canvas`)
+  }
 
-  // Canvas is always 1280×720 (landscape)
+  // Canvas is now 640×480 (centered layout)
   // We need to map video coordinates to canvas coordinates based on orientation
   
   let scaleX, scaleY, offsetX = 0, offsetY = 0
@@ -476,20 +481,43 @@ function drawBoundingBox(ctx, x, y, width, height, className, confidence, classI
   // Measure text for background sizing
   const textMetrics = ctx.measureText(label)
   const textWidth = textMetrics.width
-  const textHeight = 24 // Font size
+  const textHeight = 28 // Font size updated to 28px
+  
+  // Smart label positioning - ensure labels are fully visible
+  let labelY = y - 10 // Default position above box
+  let labelBackgroundY = y - textHeight - 8
+  
+  // If top of box too close to canvas top, move label below the box
+  if (labelBackgroundY < 5) {
+    labelY = y + height + textHeight - 5
+    labelBackgroundY = y + height + 5
+    console.log(`[Detection] Label moved below box for ${className} at y=${y} (too close to top)`)
+  }
+  
+  // Ensure label doesn't go beyond canvas boundaries
+  const canvasHeight = ctx.canvas.height
+  if (labelY > canvasHeight - 5) {
+    labelY = y - 10 // Move back above if below canvas
+    labelBackgroundY = y - textHeight - 8
+  }
   
   // Draw background for text to improve readability
   ctx.fillStyle = 'rgba(0, 0, 0, 0.7)' // Semi-transparent black background
-  ctx.fillRect(x, y - textHeight - 6, textWidth + 12, textHeight + 6)
+  ctx.fillRect(x, labelBackgroundY, textWidth + 12, textHeight + 6)
   
   // Draw label text in white for high contrast
   ctx.fillStyle = 'white'
-  ctx.fillText(label, x + 6, y - 8)
+  ctx.fillText(label, x + 6, labelY)
   
   // Optional: Add colored border around text background
   ctx.strokeStyle = color
   ctx.lineWidth = 2
-  ctx.strokeRect(x, y - textHeight - 6, textWidth + 12, textHeight + 6)
+  ctx.strokeRect(x, labelBackgroundY, textWidth + 12, textHeight + 6)
+  
+  // Log label positioning for debugging (only when repositioned)
+  if (labelBackgroundY !== y - textHeight - 8) {
+    console.log(`[Detection] Label "${className}" repositioned at y=${labelY}, backgroundY=${labelBackgroundY}`)
+  }
 }
 
 // Create and export detector instance
