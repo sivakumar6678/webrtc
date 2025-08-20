@@ -1,12 +1,30 @@
 // frontend/src/components/DesktopPage.jsx
 import { useState, useEffect, useRef } from 'react'
 import QRCode from 'qrcode'
+function drawDummyBoxes(ctx, width, height) {
+  ctx.clearRect(0, 0, width, height)
+  ctx.strokeStyle = 'red'
+  ctx.lineWidth = 3
+  ctx.font = '16px Arial'
+  ctx.fillStyle = 'red'
 
+  const boxes = [
+    { x: width * 0.1, y: height * 0.2, w: 100, h: 80, label: 'Object 1' },
+    { x: width * 0.5, y: height * 0.3, w: 120, h: 100, label: 'Object 2' },
+    { x: width * 0.3, y: height * 0.6, w: 150, h: 90, label: 'Object 3' },
+  ]
+
+  boxes.forEach(b => {
+    ctx.strokeRect(b.x, b.y, b.w, b.h)
+    ctx.fillText(b.label, b.x, b.y - 5)
+  })
+}
 function DesktopPage() {
   const [roomId, setRoomId] = useState('')
   const [qrCodeUrl, setQrCodeUrl] = useState('')
   const [connectionStatus, setConnectionStatus] = useState('Waiting for connection...')
   const videoRef = useRef(null)
+  const canvasRef = useRef(null) // ✅ added
   const peerConnectionRef = useRef(null)
   const websocketRef = useRef(null)
   const roomIdRef = useRef('') // avoid stale closures
@@ -31,6 +49,40 @@ function DesktopPage() {
       peerConnectionRef.current?.close()
     }
   }, [])
+// useEffect(() => {
+//   if (!pc) return
+//   pc.ontrack = (event) => {
+//     console.log('[Desktop] ontrack fired')
+//     if (videoRef.current) {
+//       videoRef.current.srcObject = event.streams[0]
+//       console.log('[Desktop] Video stream attached')
+//     }
+//   }
+// }, [pc])
+// === Canvas overlay effect ===
+useEffect(() => {
+  const video = videoRef.current
+  const canvas = canvasRef.current
+  if (!video || !canvas) return
+
+  const ctx = canvas.getContext('2d')
+
+  function resizeCanvas() {
+    canvas.width = video.videoWidth || 640
+    canvas.height = video.videoHeight || 480
+  }
+
+  function render() {
+    if (video.videoWidth && video.videoHeight) {
+      resizeCanvas()
+      drawDummyBoxes(ctx, canvas.width, canvas.height)
+    }
+    requestAnimationFrame(render)
+  }
+
+  console.log('[Desktop] Canvas overlay initialized')
+  render()
+}, [])
 
   const initializeWebSocket = (rid) => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -151,20 +203,34 @@ function DesktopPage() {
 
         {/* Main video viewer */}
         <div style={{ width: '100%', marginBottom: 16 }}>
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            style={{
-              width: '100%',
-              height: 'auto',
-              maxHeight: '70vh',
-              border: '2px solid #333',
-              background: '#000',
-              borderRadius: 8,
-            }}
-          />
+          {/* <div style={{ position: 'relative', display: 'inline-block' }}> */}
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              style={{
+                width: '100%',
+                // maxWidth: 640,
+                borderRadius: 8,
+                background: '#000',
+                height: 'auto',
+                maxHeight: '70vh',
+                border: '2px solid #333',
+                transform: 'scaleX(-1)', // ✅ fix mirrored video
+              }}
+            />
+            <canvas
+              ref={canvasRef}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                pointerEvents: 'none',
+              }}
+            />
+          {/* </div> */}
+
+            
         </div>
 
         {/* QR below video */}
