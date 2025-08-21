@@ -50,7 +50,11 @@ ngrok http 8000
 
 1. **One-command startup:**
    ```bash
+   # WASM mode (default) - detection runs in browser
    ./start.sh wasm
+   
+   # Server mode - detection runs on Python backend
+   ./start.sh server
    ```
 
 2. **In another terminal, expose with ngrok:**
@@ -121,14 +125,56 @@ ngrok http 8000
 - ✅ High-quality video streaming (640x480@30fps)
 - ✅ Natural camera view (no mirroring)
 - ✅ Enhanced debugging and error handling
+- ✅ Real-time object detection with bounding boxes
+- ✅ Live metrics (FPS, latency, bandwidth)
+- ✅ 30-second benchmark with metrics.json export
+- ✅ Dual detection modes: WASM (browser) and Server (Python)
 
-### Next Steps (Future Phases)
+### Detection Modes
 
-- Phase 3: Add canvas overlay for bounding boxes
-- Phase 4: Integrate WASM object detection
-- Phase 5: Add latency and FPS metrics
-- Phase 6: Export metrics to JSON
-- Phase 7: Optional server-side detection mode
+#### WASM Mode (Default)
+- Object detection runs in the browser using TensorFlow.js
+- Lightweight SSD MobileNet v2 model
+- No server-side processing required
+- Lower latency for inference
+
+#### Server Mode
+- Object detection runs on Python backend using ONNX Runtime
+- YOLOv5n quantized model for CPU inference
+- Frames sent via WebSocket for processing
+- Results returned with timing metadata
+
+### Mode Selection
+
+```bash
+# Start in WASM mode (browser-based detection)
+./start.sh wasm
+
+# Start in Server mode (Python backend detection)
+./start.sh server
+
+# Docker Compose with mode selection
+MODE=wasm docker-compose up
+MODE=server docker-compose up
+```
+
+### Benchmarking
+
+Run 30-second performance benchmarks:
+
+```bash
+# Benchmark WASM mode
+./bench/run_bench.sh --duration 30 --mode wasm
+
+# Benchmark Server mode  
+./bench/run_bench.sh --duration 30 --mode server
+```
+
+Metrics are automatically exported to `metrics.json` with:
+- End-to-end latency (median & P95)
+- Processed FPS
+- Bandwidth utilization
+- Per-frame detection samples
 
 ### Troubleshooting
 
@@ -157,3 +203,6 @@ ngrok http 8000
 - FastAPI 0.115.6
 - Uvicorn 0.34.0
 - WebSockets 14.1
+- ONNX Runtime 1.19.0 (Server mode)
+- NumPy 1.26.4 (Server mode)
+- Pillow 10.5.0 (Server mode)

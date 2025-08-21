@@ -46,3 +46,7 @@ TASK_SPEC.md
 TASK_UPDATES.md
 
 test_hud.html
+
+
+gemini-server-code.md
+server/models/yolov5n.onnx

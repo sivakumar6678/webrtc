@@ -4,6 +4,17 @@ import json
 import logging
 from typing import Any, Dict, Optional
 
+# Phase 7.5: Imports for server-side inference
+import asyncio
+import base64
+import io
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+import numpy as np
+import onnxruntime as ort
+from PIL import Image
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -12,6 +23,192 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+# Phase 7.5: Globals for model and thread pool executor
+# This will hold our loaded ONNX model session
+ort_session = None
+# A thread pool to run our blocking (CPU-intensive) model inference
+executor = ThreadPoolExecutor(max_workers=2)
+# COCO class names that YOLOv5 was trained on
+COCO_CLASSES = [
+    'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat',
+    'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat',
+    'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack',
+    'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball',
+    'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
+    'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
+    'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake',
+    'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',
+    'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink',
+    'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier',
+    'toothbrush'
+]
+
+
+# Phase 7.5: Function to load the model on startup
+@app.on_event("startup")
+async def startup_event():
+    global ort_session
+    model_path = "models/yolov5n.onnx"
+    logger.info(f"Loading ONNX model from {model_path}...")
+    try:
+        # We use CPUExecutionProvider as required (no GPU needed)
+        ort_session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+        logger.info("✅ ONNX model loaded successfully.")
+    except Exception as e:
+        logger.error(f"❌ Failed to load ONNX model: {e}")
+        logger.info("Server will continue without inference capability")
+
+
+# Phase 7.5: Helper functions for image processing and model inference
+def preprocess_image(image: Image.Image, input_size: int = 640) -> tuple:
+    """ Prepares the image for the YOLOv5 model. """
+    # Resize and pad the image to be a square
+    w, h = image.size
+    scale = input_size / max(w, h)
+    new_w, new_h = int(w * scale), int(h * scale)
+    image = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+    # Create a new square image and paste the resized image into it
+    new_image = Image.new('RGB', (input_size, input_size), (114, 114, 114))
+    new_image.paste(image, ((input_size - new_w) // 2, (input_size - new_h) // 2))
+
+    # Convert to numpy array, scale to [0,1], and change layout to CHW (Channels, Height, Width)
+    image_data = np.array(new_image, dtype=np.float32) / 255.0
+    image_data = np.transpose(image_data, (2, 0, 1))  # HWC to CHW
+    image_data = np.expand_dims(image_data, axis=0)   # Add batch dimension
+    return image_data, scale, new_w, new_h
+
+
+def postprocess_results(outputs: np.ndarray, scale: float, new_w: int, new_h: int, 
+                       input_size: int = 640, conf_threshold: float = 0.5, 
+                       iou_threshold: float = 0.45) -> list:
+    """ Decodes the model output back into bounding boxes. """
+    # This is a simplified NMS and decoding for YOLOv5.
+    # The output format is [batch, num_predictions, 85] where 85 = [x, y, w, h, confidence, 80 class scores]
+    predictions = outputs[0]
+    
+    # Filter out low-confidence predictions
+    predictions = predictions[predictions[:, 4] > conf_threshold]
+
+    if len(predictions) == 0:
+        return []
+
+    # Get class with highest score
+    class_ids = np.argmax(predictions[:, 5:], axis=1)
+    confidences = np.max(predictions[:, 5:], axis=1)
+
+    # Convert box format from [center_x, center_y, width, height] to [x1, y1, x2, y2]
+    box_coords = predictions[:, :4]
+    pad_x = (input_size - new_w) // 2
+    pad_y = (input_size - new_h) // 2
+    
+    x1 = (box_coords[:, 0] - box_coords[:, 2] / 2 - pad_x) / scale
+    y1 = (box_coords[:, 1] - box_coords[:, 3] / 2 - pad_y) / scale
+    x2 = (box_coords[:, 0] + box_coords[:, 2] / 2 - pad_x) / scale
+    y2 = (box_coords[:, 1] + box_coords[:, 3] / 2 - pad_y) / scale
+    
+    boxes = np.column_stack([x1, y1, x2, y2])
+    
+    # Non-Maximum Suppression (a simplified version)
+    indices = cv_nms(boxes, confidences, iou_threshold)
+    
+    detections = []
+    for i in indices:
+        x1, y1, x2, y2 = boxes[i]
+        label = COCO_CLASSES[class_ids[i]]
+        score = confidences[i]
+        detections.append({
+            "label": label, 
+            "score": float(score), 
+            "xmin": float(x1), 
+            "ymin": float(y1), 
+            "xmax": float(x2), 
+            "ymax": float(y2)
+        })
+        
+    return detections
+
+
+def cv_nms(boxes, scores, thresh):
+    """ A simple NMS implementation. """
+    x1 = boxes[:, 0]
+    y1 = boxes[:, 1]
+    x2 = boxes[:, 2]
+    y2 = boxes[:, 3]
+    areas = (x2 - x1) * (y2 - y1)
+    order = scores.argsort()[::-1]
+    keep = []
+    while order.size > 0:
+        i = order[0]
+        keep.append(i)
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
+        w = np.maximum(0.0, xx2 - xx1)
+        h = np.maximum(0.0, yy2 - yy1)
+        inter = w * h
+        ovr = inter / (areas[i] + areas[order[1:]] - inter)
+        inds = np.where(ovr <= thresh)[0]
+        order = order[inds + 1]
+    return keep
+
+
+def run_inference(image_bytes: bytes, frame_id: str, capture_ts: float, recv_ts: float) -> dict:
+    """ The main synchronous inference function with Phase 7.5 contract. """
+    inference_start = time.time() * 1000  # Convert to milliseconds
+    
+    if ort_session is None:
+        logger.warning("ONNX model is not loaded, skipping inference.")
+        return {
+            "frame_id": frame_id,
+            "capture_ts": capture_ts,
+            "recv_ts": recv_ts,
+            "inference_ts": inference_start,
+            "detections": []
+        }
+    
+    try:
+        image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+        original_w, original_h = image.size
+        
+        # Preprocess
+        input_data, scale, new_w, new_h = preprocess_image(image)
+        
+        # Run model
+        input_name = ort_session.get_inputs()[0].name
+        outputs = ort_session.run(None, {input_name: input_data})
+        
+        # Postprocess and get detections
+        detections = postprocess_results(outputs[0], scale, new_w, new_h)
+        
+        # Normalize coordinates to [0,1] as required by Phase 7.5 spec
+        for det in detections:
+            det["xmin"] /= original_w
+            det["ymin"] /= original_h
+            det["xmax"] /= original_w
+            det["ymax"] /= original_h
+
+        inference_end = time.time() * 1000
+        
+        return {
+            "frame_id": frame_id,
+            "capture_ts": capture_ts,
+            "recv_ts": recv_ts,
+            "inference_ts": inference_end,
+            "detections": detections
+        }
+    except Exception as e:
+        logger.error(f"Error during inference: {e}")
+        return {
+            "frame_id": frame_id,
+            "capture_ts": capture_ts,
+            "recv_ts": recv_ts,
+            "inference_ts": time.time() * 1000,
+            "detections": []
+        }
+
 
 # In-memory signaling store
 # rooms: {
@@ -192,6 +389,68 @@ async def websocket_endpoint(ws: WebSocket):
                     payload["candidate"] = msg.get("candidate")
 
                 await relay_or_queue(room_id, role, payload)
+            
+            # Phase 7.5: Handler for server-side inference
+            elif msg_type == "frame-for-inference":
+                if role != "desktop" or not room_id:
+                    continue  # Only desktop can request inference
+                
+                # Get the current asyncio loop for thread pool execution
+                loop = asyncio.get_running_loop()
+                
+                # Image data is expected to be a base64-encoded string
+                image_data_b64 = msg.get("imageData")
+                frame_id = msg.get("frame_id", "unknown")
+                capture_ts = msg.get("capture_ts", time.time() * 1000)
+                
+                if not image_data_b64:
+                    continue
+                
+                recv_ts = time.time() * 1000  # Mark when server received the frame
+                
+                try:
+                    # The data URL prefix needs to be removed (e.g., "data:image/jpeg;base64,")
+                    if "," in image_data_b64:
+                        header, encoded = image_data_b64.split(",", 1)
+                    else:
+                        encoded = image_data_b64
+                    
+                    image_bytes = base64.b64decode(encoded)
+                    
+                    # Run the blocking inference function in the thread pool to avoid freezing the server
+                    result = await loop.run_in_executor(
+                        executor, 
+                        run_inference, 
+                        image_bytes, 
+                        frame_id, 
+                        capture_ts, 
+                        recv_ts
+                    )
+                    
+                    # Send the results back to the desktop client
+                    response_payload = {
+                        "type": "inference-result",
+                        "roomId": room_id,
+                        **result  # Includes frame_id, capture_ts, recv_ts, inference_ts, detections
+                    }
+                    await ws.send_text(json.dumps(response_payload))
+                    
+                    logger.debug(f"Inference completed for frame {frame_id}: {len(result['detections'])} detections")
+                    
+                except Exception as e:
+                    logger.error(f"Error processing frame-for-inference: {e}")
+                    # Send error response
+                    error_response = {
+                        "type": "inference-result",
+                        "roomId": room_id,
+                        "frame_id": frame_id,
+                        "capture_ts": capture_ts,
+                        "recv_ts": recv_ts,
+                        "inference_ts": time.time() * 1000,
+                        "detections": [],
+                        "error": str(e)
+                    }
+                    await ws.send_text(json.dumps(error_response))
 
     except WebSocketDisconnect:
         pass

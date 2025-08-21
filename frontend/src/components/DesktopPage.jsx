@@ -4,13 +4,107 @@ import QRCode from 'qrcode'
 import { detector, drawDetections } from './detection.js'
 import { metricsTracker } from './metrics.js'
 import HUD from './HUD.jsx'
+
+// Phase 7.5: Server-side detection function
+async function runServerDetection(video, websocketRef, roomIdRef) {
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+  
+  // Set canvas size to match video
+  canvas.width = video.videoWidth || 640
+  canvas.height = video.videoHeight || 480
+  
+  // Draw current video frame to canvas
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+  
+  // Convert to base64 JPEG
+  const imageData = canvas.toDataURL('image/jpeg', 0.8)
+  const frameId = `frame_${Date.now()}_${Math.random().toString(36).slice(2)}`
+  const captureTs = performance.now()
+  
+  return new Promise((resolve) => {
+    // Send frame to server via WebSocket
+    const ws = websocketRef?.current
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      resolve({
+        detections: [],
+        latency: 0,
+        error: 'WebSocket not connected'
+      })
+      return
+    }
+    
+    // Set up one-time listener for inference result
+    const handleMessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data)
+        if (msg.type === 'inference-result' && msg.frame_id === frameId) {
+          ws.removeEventListener('message', handleMessage)
+          
+          const displayTs = performance.now()
+          const e2eLatency = displayTs - captureTs
+          
+          // Convert server detections to frontend format
+          const detections = (msg.detections || []).map(det => ({
+            className: det.label,
+            confidence: det.score,
+            bbox: [
+              det.xmin * canvas.width,  // Convert normalized coords back to pixels
+              det.ymin * canvas.height,
+              det.xmax * canvas.width,
+              det.ymax * canvas.height
+            ]
+          }))
+          
+          resolve({
+            detections,
+            latency: e2eLatency,
+            rawCount: detections.length,
+            serverTiming: {
+              capture_ts: msg.capture_ts,
+              recv_ts: msg.recv_ts,
+              inference_ts: msg.inference_ts
+            }
+          })
+        }
+      } catch (error) {
+        console.error('[Server Detection] Error parsing response:', error)
+      }
+    }
+    
+    ws.addEventListener('message', handleMessage)
+    
+    // Send frame for inference
+    ws.send(JSON.stringify({
+      type: 'frame-for-inference',
+      roomId: roomIdRef?.current,
+      imageData,
+      frame_id: frameId,
+      capture_ts: captureTs
+    }))
+    
+    // Timeout after 5 seconds
+    setTimeout(() => {
+      ws.removeEventListener('message', handleMessage)
+      resolve({
+        detections: [],
+        latency: 5000,
+        error: 'Server detection timeout'
+      })
+    }, 5000)
+  })
+}
+
 function DesktopPage() {
   const [roomId, setRoomId] = useState('')
   const [qrCodeUrl, setQrCodeUrl] = useState('')
   const [connectionStatus, setConnectionStatus] = useState('Waiting for connection...')
   
+  // Phase 7.5: Detection mode (wasm or server)
+  const detectionMode = import.meta.env.MODE || 'wasm'
+  
   // Detection states
-  const [modelStatus, setModelStatus] = useState('Loading model...')
+  const [modelStatus, setModelStatus] = useState(detectionMode === 'server' ? 'Server mode ready' : 'Loading model...')
   const [detectionStatus, setDetectionStatus] = useState('Waiting for video...')
   const [fps, setFps] = useState(0)
   const [detectionCount, setDetectionCount] = useState(0)
@@ -61,6 +155,7 @@ function DesktopPage() {
   const lastCaptureTsRef = useRef(0)
   const lastCaptureFrameRef = useRef(0)
   const benchRunningRef = useRef(false)
+  const [isBenchRunning, setIsBenchRunning] = useState(false)
 
   useEffect(() => {
     // Generate roomId
@@ -104,6 +199,13 @@ function DesktopPage() {
   // Initialize object detection model
   useEffect(() => {
     const initializeDetection = async () => {
+      if (detectionMode === 'server') {
+        console.log('[Desktop] Server mode - skipping WASM model loading')
+        setModelStatus('✅ Server mode ready')
+        setDetectionStatus('Server-side ONNX detection ready')
+        return
+      }
+      
       try {
         setModelStatus('Loading TensorFlow.js...')
         
@@ -130,7 +232,7 @@ function DesktopPage() {
     }
 
     initializeDetection()
-  }, [])
+  }, [detectionMode])
 
 // === Canvas overlay with real object detection ===
 useEffect(() => {
@@ -213,7 +315,10 @@ useEffect(() => {
         try {
           let detectionResult
           
-          if (detector.isLoaded) {
+          if (detectionMode === 'server') {
+            // Phase 7.5: Server-side detection
+            detectionResult = await runServerDetection(video, websocketRef, roomIdRef)
+          } else if (detector.isLoaded) {
             // Use SSD MobileNet v2 with confidence threshold >= 0.8
             const detectionStart = performance.now()
             detectionResult = await detector.detect(video, 300, 300, 0.8)
@@ -544,8 +649,14 @@ useEffect(() => {
 
   // Phase 6B: 30s bench runner (collect summary and export)
   const startBench = async (durationSec = 30) => {
-    if (benchRunningRef.current) return
+    if (benchRunningRef.current) {
+      console.log('[Bench] Already running, ignoring request')
+      return
+    }
+    
+    console.log(`[Bench] Starting ${durationSec}s benchmark run...`)
     benchRunningRef.current = true
+    setIsBenchRunning(true)
 
     // Reset stores for a clean window
     metricsStoreRef.current.fps = []
@@ -559,6 +670,8 @@ useEffect(() => {
     const start = performance.now()
     const endAt = start + durationSec * 1000
 
+    console.log('[Bench] Metrics collection started, will run until:', new Date(Date.now() + durationSec * 1000).toLocaleTimeString())
+
     // Poll bandwidth while running
     const bwTimer = setInterval(() => metricsTracker.updateBandwidth(), 1000)
 
@@ -567,6 +680,7 @@ useEffect(() => {
       if (performance.now() >= endAt) {
         clearInterval(bwTimer)
         benchRunningRef.current = false
+        setIsBenchRunning(false)
 
         // Compute summary
         const e2e = metricsStoreRef.current.e2eLatencyMs
@@ -605,7 +719,15 @@ useEffect(() => {
         document.body.removeChild(a)
         URL.revokeObjectURL(url)
 
-        console.log('[Bench] Done:', payload)
+        console.log(`[Bench] ✅ ${durationSec}s benchmark completed!`)
+        console.log('[Bench] Summary:', summary)
+        console.log('[Bench] Full metrics exported to metrics.json')
+        console.log('[Bench] Samples collected:', {
+          e2eLatency: e2e.length,
+          fps: metricsStoreRef.current.fps.length,
+          detections: metricsStoreRef.current.detectionsByFrame.length,
+          processedFrames: processedFramesRef.current
+        })
         return
       }
       requestAnimationFrame(benchTick)
@@ -640,6 +762,7 @@ useEffect(() => {
       }}>
         <div><strong>Room:</strong> {roomId}</div>
         <div><strong>Status:</strong> {connectionStatus}</div>
+        <div><strong>Mode:</strong> {detectionMode.toUpperCase()} {detectionMode === 'server' ? '🖥️' : '🌐'}</div>
         <div><strong>Model:</strong> {modelStatus}</div>
         <div><strong>Detection:</strong> {detectionStatus}</div>
         <div>
@@ -674,26 +797,34 @@ useEffect(() => {
         <div style={{ color: '#ff9900' }}>Tensors: {memoryInfo.numTensors}</div>
         <div style={{ color: '#ff6600' }}>Memory: {(memoryInfo.numBytes / 1024 / 1024).toFixed(1)}MB</div>
         <div style={{ color: '#00cccc' }}>↓{hudMetrics.bandwidth.downlink}kbps ↑{hudMetrics.bandwidth.uplink}kbps</div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <button onClick={exportMetrics} style={{
             background: '#1e90ff',
             color: 'white',
             border: 'none',
-            padding: '6px 8px',
+            padding: '8px 12px',
             borderRadius: '6px',
-            cursor: 'pointer'
+            cursor: 'pointer',
+            fontSize: '12px',
+            fontWeight: 'bold'
           }}>
-            Download Metrics
+            📊 Export Metrics
           </button>
-          <button onClick={() => startBench(30)} style={{
-            background: '#00b894',
-            color: 'white',
-            border: 'none',
-            padding: '6px 8px',
-            borderRadius: '6px',
-            cursor: 'pointer'
-          }}>
-            Start 30s Bench
+          <button 
+            onClick={() => startBench(30)} 
+            disabled={isBenchRunning}
+            style={{
+              background: isBenchRunning ? '#666' : '#00b894',
+              color: 'white',
+              border: 'none',
+              padding: '8px 12px',
+              borderRadius: '6px',
+              cursor: isBenchRunning ? 'not-allowed' : 'pointer',
+              fontSize: '12px',
+              fontWeight: 'bold'
+            }}
+          >
+            {isBenchRunning ? '⏳ Running...' : '🚀 Start 30s Bench'}
           </button>
         </div>
       </div>

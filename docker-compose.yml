@@ -1,0 +1,30 @@
+services:
+  server:
+    build:
+      context: ./server
+    image: webrtc-server:latest
+    container_name: webrtc-server
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MODE=${MODE:-wasm}
+    volumes:
+      # Mount models directory for server mode
+      - ./server/models:/app/models:ro
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        - MODE=${MODE:-wasm}
+    image: webrtc-frontend:latest
+    container_name: webrtc-frontend
+    depends_on:
+      - server
+    ports:
+      - "3000:80"
+    environment:
+      - MODE=${MODE:-wasm}
+    restart: unless-stopped

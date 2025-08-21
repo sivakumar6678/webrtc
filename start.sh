@@ -6,6 +6,9 @@ MODE=${1:-wasm}
 
 echo "Starting WebRTC Multi-Object Detection in $MODE mode..."
 
+# Export MODE for server to use
+export MODE=$MODE
+
 # Kill any process already on port 8000
 echo "Checking for existing server on port 8000..."
 lsof -ti:8000 | xargs kill -9 2>/dev/null

@@ -12,5 +12,9 @@ export default defineConfig({
   },
   optimizeDeps: {
     include: ['onnxruntime-web']
+  },
+  define: {
+    // Make MODE available to the frontend
+    'import.meta.env.MODE': JSON.stringify(process.env.MODE || 'wasm')
   }
 })
