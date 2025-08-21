@@ -15,8 +15,8 @@ COPY . .
 ARG MODE=wasm
 ENV MODE=${MODE}
 
-# Build Vite
-RUN npm run build
+# Build Vite with MODE env
+RUN VITE_MODE=$MODE npm run build
 
 # 2) Runtime stage (nginx)
 FROM nginx:1.25-alpine

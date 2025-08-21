@@ -24,7 +24,5 @@ services:
     depends_on:
       - server
     ports:
-      - "3000:80"
-    environment:
-      - MODE=${MODE:-wasm}
+      - "5173:80"   # ✅ fix: nginx serves on 80 inside container
     restart: unless-stopped

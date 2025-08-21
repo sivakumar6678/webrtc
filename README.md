@@ -48,27 +48,25 @@ ngrok http 8000
 
 #### Quick Start (Recommended)
 
-1. **One-command startup:**
+1. **One-command startup with Docker:**
    ```bash
    # WASM mode (default) - detection runs in browser
-   ./start.sh wasm
+   ./start.sh
    
    # Server mode - detection runs on Python backend
-   ./start.sh server
+   ./start.sh --mode server
+   
+   # With automatic ngrok tunnel
+   ./start.sh --mode wasm --ngrok
+   
+   # Local development mode (no Docker)
+   ./start.sh --no-docker
    ```
 
-2. **In another terminal, expose with ngrok:**
-   ```bash
-   ngrok http 8000
-   ```
-   Copy the HTTPS URL (e.g., `https://abc123.ngrok.io`)
-
-3. **Open desktop browser:**
-   - Go to the ngrok HTTPS URL
-   - You'll see a QR code and room ID
-
-4. **Connect phone:**
-   - Scan the QR code with your phone
+2. **Connect your phone:**
+   - The script will display a local URL and QR code
+   - For phone access, use `--ngrok` flag or manually run `ngrok http 3000`
+   - Scan the QR code with your phone or visit the ngrok HTTPS URL
    - Grant camera permission
    - Your phone's camera stream will appear on the desktop
 
@@ -147,15 +145,17 @@ ngrok http 8000
 ### Mode Selection
 
 ```bash
-# Start in WASM mode (browser-based detection)
-./start.sh wasm
+# Docker mode (recommended)
+./start.sh --mode wasm     # Browser-based detection
+./start.sh --mode server   # Python backend detection
+./start.sh --ngrok         # With automatic ngrok tunnel
 
-# Start in Server mode (Python backend detection)
-./start.sh server
+# Direct Docker Compose
+MODE=wasm docker-compose up --build
+MODE=server docker-compose up --build
 
-# Docker Compose with mode selection
-MODE=wasm docker-compose up
-MODE=server docker-compose up
+# Local development mode
+./start.sh --no-docker --mode wasm
 ```
 
 ### Benchmarking

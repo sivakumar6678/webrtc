@@ -3,4 +3,4 @@ uvicorn[standard]==0.34.0
 websockets==14.1
 onnxruntime==1.19.0
 numpy==1.26.4
-Pillow==10.5.0
+Pillow==10.4.0
