@@ -1,208 +1,143 @@
 # WebRTC Multi-Object Detection
 
-A real-time WebRTC system that streams video from a phone to a laptop browser for object detection.
+A real-time system that streams a phone camera to a desktop browser via WebRTC and overlays multi-object detections on the video. The project supports in-browser inference (WASM) for low-resource machines and a server-backed mode for consistent performance.
 
-## Phase 2: WebRTC Phone → Browser Streaming
+---
 
-This implementation provides WebRTC streaming from phone camera to desktop browser with Python backend signaling.
+## Overview
+- Phone streams camera → Desktop receives via WebRTC.
+- Detection runs either in the browser (TFJS) or on a Python server (ONNX Runtime).
+- Overlays show bounding boxes and labels aligned to frames using timestamps.
+- Heads-up display (HUD) reports FPS, end-to-end latency, and bandwidth; metrics can be exported.
 
-### Setup Instructions
+---
 
-#### 1. Backend Setup (FastAPI + WebSocket Signaling)
+## Features
+- Two modes: `wasm` (in-browser) and `server` (backend inference).
+- One-command launcher with Docker and optional ngrok tunnel.
+- QR/URL flow for easy phone connection.
+- Orientation/mirroring handling to keep overlays aligned.
+- Benchmark script that saves `metrics.json` with latency, FPS, and bandwidth.
 
+---
+
+## Installation & Setup
+
+### Prerequisites
+- Docker and Docker Compose (recommended), or
+- Python 3.10 and Node.js 18+ for local development
+- Optional: `ngrok` for HTTPS access from a phone, `qrencode` for terminal QR
+
+### Quick Start (Docker)
 ```bash
-# Navigate to server directory
-cd server
+# Default (WASM mode)
+./start.sh
 
-# Install dependencies (if venv not already set up)
-pip install -r requirements.txt
+# Server mode (backend inference)
+./start.sh --mode server
 
-# Start the FastAPI server
-uvicorn main:app --host 0.0.0.0 --port 8000
+# With public HTTPS tunnel
+./start.sh --ngrok                 # default wasm
+./start.sh --mode server --ngrok
 ```
 
-#### 2. Frontend Setup (React + Vite)
-
+### Local Development (no Docker)
+- Backend (FastAPI + WebSocket signaling):
 ```bash
-# Navigate to frontend directory
+cd server
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+- Frontend (Vite build served by backend):
+```bash
 cd frontend
-
-# Install dependencies
 npm install
-
-# Build the frontend
 npm run build
 ```
 
-#### 3. Expose Server with ngrok (for HTTPS access from phone)
+### Environment
+- `MODE=wasm|server` controls the active inference mode.
+- Frontend build reads `VITE_MODE` derived from `MODE`.
 
+### Models
+- WASM (TFJS SSD MobileNet V2):
 ```bash
-# Install ngrok if not already installed
-# Download from https://ngrok.com/download
+./download_ssd_model.sh
+# or
+./download_tfjs_model.sh
+```
+- Server (ONNX YOLOv5n): model available at `server/models/yolov5n.onnx`.
 
-# Expose the server
-ngrok http 8000
+---
+
+## Usage
+1. Start the app using one of the commands above.
+2. Open the desktop UI:
+   - Docker: http://localhost:5173
+   - Local dev: http://localhost:8000
+3. Connect your phone:
+   - With ngrok: scan the displayed QR or open the printed HTTPS URL on the phone.
+   - Without ngrok: ensure the phone can reach the host over the LAN and use HTTPS if required by the browser.
+4. Grant camera permissions on the phone to start streaming.
+5. Observe detections and HUD metrics on the desktop.
+
+### Switching Modes
+```bash
+./start.sh --mode wasm
+./start.sh --mode server
 ```
 
-### Usage Instructions
+---
 
-#### Quick Start (Recommended)
-
-1. **One-command startup with Docker:**
-   ```bash
-   # WASM mode (default) - detection runs in browser
-   ./start.sh
-   
-   # Server mode - detection runs on Python backend
-   ./start.sh --mode server
-   
-   # With automatic ngrok tunnel
-   ./start.sh --mode wasm --ngrok
-   
-   # Local development mode (no Docker)
-   ./start.sh --no-docker
-   ```
-
-2. **Connect your phone:**
-   - The script will display a local URL and QR code
-   - For phone access, use `--ngrok` flag or manually run `ngrok http 3000`
-   - Scan the QR code with your phone or visit the ngrok HTTPS URL
-   - Grant camera permission
-   - Your phone's camera stream will appear on the desktop
-
-#### Manual Setup (Alternative)
-
-1. **Install backend dependencies:**
-   ```bash
-   cd server
-   pip install -r requirements.txt
-   ```
-
-2. **Start the backend server:**
-   ```bash
-   cd server
-   uvicorn main:app --host 0.0.0.0 --port 8000
-   ```
-
-3. **Frontend is pre-built** (static HTML with inline React)
-   - No build step required
-   - Files are in `frontend/dist/`
-
-4. **Expose with ngrok:**
-   ```bash
-   ngrok http 8000
-   ```
-
-5. **Test the connection:**
-   - Desktop: Open ngrok URL in browser
-   - Phone: Scan QR code or visit `/join/{roomId}` URL
-
-### Architecture
-
-- **Frontend (React):**
-  - `/` - Desktop viewer page with QR code
-  - `/join/:roomId` - Phone camera page
-  - WebRTC PeerConnection for video streaming
-  - WebSocket for signaling
-
-- **Backend (FastAPI):**
-  - Serves static files from `frontend/dist`
-  - WebSocket endpoint `/ws` for signaling
-  - Manages rooms and peer connections
-  - Forwards SDP offers/answers and ICE candidates
-
-### Features
-
-- ✅ QR code generation for easy phone connection (with fallback)
-- ✅ WebRTC peer-to-peer video streaming
-- ✅ WebSocket signaling server
-- ✅ Room-based connections
-- ✅ Responsive design for mobile and desktop
-- ✅ Connection status indicators
-- ✅ Automatic camera permission handling
-- ✅ High-quality video streaming (640x480@30fps)
-- ✅ Natural camera view (no mirroring)
-- ✅ Enhanced debugging and error handling
-- ✅ Real-time object detection with bounding boxes
-- ✅ Live metrics (FPS, latency, bandwidth)
-- ✅ 30-second benchmark with metrics.json export
-- ✅ Dual detection modes: WASM (browser) and Server (Python)
-
-### Detection Modes
-
-#### WASM Mode (Default)
-- Object detection runs in the browser using TensorFlow.js
-- Lightweight SSD MobileNet v2 model
-- No server-side processing required
-- Lower latency for inference
-
-#### Server Mode
-- Object detection runs on Python backend using ONNX Runtime
-- YOLOv5n quantized model for CPU inference
-- Frames sent via WebSocket for processing
-- Results returned with timing metadata
-
-### Mode Selection
-
+## Metrics & Benchmarking
+Run a timed benchmark and export metrics:
 ```bash
-# Docker mode (recommended)
-./start.sh --mode wasm     # Browser-based detection
-./start.sh --mode server   # Python backend detection
-./start.sh --ngrok         # With automatic ngrok tunnel
-
-# Direct Docker Compose
-MODE=wasm docker-compose up --build
-MODE=server docker-compose up --build
-
-# Local development mode
-./start.sh --no-docker --mode wasm
-```
-
-### Benchmarking
-
-Run 30-second performance benchmarks:
-
-```bash
-# Benchmark WASM mode
 ./bench/run_bench.sh --duration 30 --mode wasm
-
-# Benchmark Server mode  
 ./bench/run_bench.sh --duration 30 --mode server
 ```
+- At completion, a `metrics.json` file is saved with a summary of:
+  - Median and P95 end-to-end latency (ms)
+  - Processed FPS
+  - Uplink and downlink bandwidth (kbps)
+- Optional time-series samples may be included for deeper analysis.
 
-Metrics are automatically exported to `metrics.json` with:
-- End-to-end latency (median & P95)
-- Processed FPS
-- Bandwidth utilization
-- Per-frame detection samples
+---
 
-### Troubleshooting
+## Troubleshooting
+- No camera preview on phone:
+  - Use HTTPS (e.g., ngrok) and verify camera permissions.
+  - Confirm the signaling server is reachable.
+- WebSocket errors:
+  - Ensure port 8000 is accessible locally or via the tunnel.
+- Overlay misalignment or rotation:
+  - Keep the desktop canvas in landscape; input rotation and mirroring are handled in code.
+- Low FPS / high CPU:
+  - WASM: reduce input resolution, process every Nth frame, prefer local TFJS model files.
+  - Server: lower input frame rate/resolution; ensure server CPU headroom.
+- Docker checks:
+  - Use `docker-compose ps` and `docker-compose logs -f` to diagnose container issues.
 
-1. **Camera not working on phone:**
-   - Ensure you're using HTTPS (ngrok provides this)
-   - Check browser permissions for camera access
+---
 
-2. **WebSocket connection fails:**
-   - Verify the server is running on port 8000
-   - Check that ngrok is properly forwarding requests
+## Project Structure (High Level)
+```
+webrtc/
+├─ start.sh                 # Launcher (Docker/local, ngrok, modes)
+├─ docker-compose.yml       # Frontend (nginx) + server (FastAPI)
+├─ bench/                   # Benchmark utilities
+├─ frontend/                # React/Vite app and built assets
+├─ server/                  # FastAPI app, signaling, optional inference
+└─ metrics/                 # Example and exported metrics
+```
 
-3. **Video not appearing on desktop:**
-   - Check browser console for WebRTC errors
-   - Ensure both devices are connected to the signaling server
-   - Try refreshing both pages
+---
 
-### Dependencies
-
-**Frontend:**
-- React 19.1.1
-- React Router DOM 7.1.1
-- QRCode 1.5.4
-- Vite 7.1.2
-
-**Backend:**
-- FastAPI 0.115.6
-- Uvicorn 0.34.0
-- WebSockets 14.1
-- ONNX Runtime 1.19.0 (Server mode)
-- NumPy 1.26.4 (Server mode)
-- Pillow 10.5.0 (Server mode)
+## Script Reference
+- `./start.sh` options:
+  - `--mode wasm|server`
+  - `--ngrok`
+  - `--no-docker`
+- `./bench/run_bench.sh` runs a timed benchmark and exports metrics.
+- `./download_ssd_model.sh` and `./download_tfjs_model.sh` fetch local TFJS model files.
