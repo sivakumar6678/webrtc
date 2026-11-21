@@ -3,7 +3,17 @@
 A real-time system that streams a phone camera to a desktop browser via WebRTC and overlays multi-object detections on the video. The project supports in-browser inference (WASM) for low-resource machines and a server-backed mode for consistent performance.
 
 ---
+## Why there are two inference modes
 
+A phone streams its camera to a desktop browser over WebRTC. Object detection can
+run in the browser with TensorFlow.js or on a Python server with ONNX Runtime.
+The desktop overlays the detections on the video.
+
+The two modes let me investigate a practical question: on a given device and
+network, where should detection run? The application reports frame rate,
+end-to-end latency, and bandwidth so I can compare them.
+
+---
 ## Overview
 - Phone streams camera → Desktop receives via WebRTC.
 - Detection runs either in the browser (TFJS) or on a Python server (ONNX Runtime).
